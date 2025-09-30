@@ -1129,6 +1129,7 @@ const state = {
   billingRecords: [],
   loans: [],
   installmentPlans: [],
+  activeTreatments: [],
   properties: createPropertyState(),
   litter: 0,
   ambience: { environment: 0, welfare: 0, morale: 0, reputation: 0 },
@@ -1204,7 +1205,13 @@ const elements = {
   builtRooms: document.querySelector("#built-rooms"),
 };
 
-const menuOptions = Array.from(document.querySelectorAll(".menu-option"));
+const menuOptions = Array.from(document.querySelectorAll(".menu-option[data-tab-target]"));
+const playfieldModeButtons = Array.from(document.querySelectorAll(".playfield-mode-button"));
+const playfieldPanels = Array.from(document.querySelectorAll(".playfield-panel"));
+const constructionToggleButton = document.querySelector("#construction-menu-toggle");
+const buildDropdown = document.querySelector("#build-dropdown");
+const buildDropdownToggle = document.querySelector("#build-dropdown-toggle");
+const buildDropdownCloseButton = document.querySelector("#build-dropdown-close");
 
 let selectedRoom = null;
 let patientIdCounter = 1;
@@ -1215,6 +1222,7 @@ let blueprintBuffer = null;
 let emptyTileSprite = null;
 let lockedTileSprite = null;
 const themedTileCache = new Map();
+let playfieldMode = "mainland";
 
 const invalidateCanvasCache = () => {
   blueprintBuffer = null;
@@ -2734,8 +2742,138 @@ const setBuildMode = (active) => {
   }
 };
 
+const isBuildDropdownOpen = () => Boolean(buildDropdown) && !buildDropdown.hasAttribute("hidden");
+
+const setBuildDropdownOpen = (open, { focusToggle = false } = {}) => {
+  if (!buildDropdown || !buildDropdownToggle) {
+    return;
+  }
+  const shouldOpen = Boolean(open);
+  const currentlyOpen = isBuildDropdownOpen();
+  if (shouldOpen === currentlyOpen) {
+    if (!shouldOpen && focusToggle) {
+      buildDropdownToggle.focus();
+    }
+    return;
+  }
+
+  if (shouldOpen) {
+    buildDropdown.removeAttribute("hidden");
+    buildDropdown.setAttribute("aria-hidden", "false");
+    buildDropdownToggle.setAttribute("aria-expanded", "true");
+    buildDropdownToggle.classList.add("active");
+    document.body.classList.add("build-dropdown-open");
+    setTimeout(() => buildDropdown.focus(), 0);
+  } else {
+    buildDropdown.setAttribute("aria-hidden", "true");
+    buildDropdown.setAttribute("hidden", "");
+    buildDropdownToggle.setAttribute("aria-expanded", "false");
+    buildDropdownToggle.classList.remove("active");
+    document.body.classList.remove("build-dropdown-open");
+    if (focusToggle) {
+      buildDropdownToggle.focus();
+    }
+  }
+};
+
+const syncPlayfieldModeUI = () => {
+  document.body.dataset.playfieldMode = playfieldMode;
+  playfieldModeButtons.forEach((button) => {
+    const isActive = button.dataset.mode === playfieldMode;
+    button.classList.toggle("active", isActive);
+    button.setAttribute("aria-pressed", isActive ? "true" : "false");
+    button.setAttribute("aria-selected", isActive ? "true" : "false");
+  });
+  playfieldPanels.forEach((panel) => {
+    panel.classList.toggle("active", panel.dataset.mode === playfieldMode);
+  });
+  if (constructionToggleButton) {
+    constructionToggleButton.classList.toggle("active", playfieldMode === "construction");
+  }
+};
+
+const setPlayfieldMode = (mode) => {
+  const nextMode = mode === "construction" ? "construction" : "mainland";
+  if (playfieldMode === nextMode) {
+    syncPlayfieldModeUI();
+  } else {
+    playfieldMode = nextMode;
+    syncPlayfieldModeUI();
+  }
+
+  if (playfieldMode === "construction") {
+    setBuildDropdownOpen(true);
+    updateMenuOptions("build");
+  } else {
+    setBuildMode(false);
+    setBuildDropdownOpen(false);
+    const activeButton = document.querySelector(".tab-button.active");
+    if (activeButton) {
+      updateMenuOptions(activeButton.dataset.tab);
+    }
+  }
+
+  updateBuildGuidance();
+};
+
+const setupPlayfieldModes = () => {
+  playfieldModeButtons.forEach((button) => {
+    button.addEventListener("click", () => setPlayfieldMode(button.dataset.mode));
+  });
+  if (constructionToggleButton) {
+    constructionToggleButton.addEventListener("click", () => {
+      if (playfieldMode === "construction") {
+        setPlayfieldMode("mainland");
+      } else {
+        setPlayfieldMode("construction");
+      }
+    });
+  }
+};
+
+const setupBuildDropdown = () => {
+  if (buildDropdownToggle) {
+    buildDropdownToggle.addEventListener("click", () => {
+      if (!buildDropdown) {
+        return;
+      }
+      const willOpen = buildDropdown.hasAttribute("hidden");
+      if (willOpen) {
+        setPlayfieldMode("construction");
+      } else {
+        setBuildDropdownOpen(false);
+      }
+    });
+  }
+
+  if (buildDropdownCloseButton) {
+    buildDropdownCloseButton.addEventListener("click", () => {
+      setBuildDropdownOpen(false, { focusToggle: true });
+    });
+  }
+
+  document.addEventListener("click", (event) => {
+    if (!buildDropdown || buildDropdown.hasAttribute("hidden")) {
+      return;
+    }
+    if (buildDropdown.contains(event.target) || buildDropdownToggle?.contains(event.target)) {
+      return;
+    }
+    setBuildDropdownOpen(false);
+  });
+};
+
 const updateBuildGuidance = () => {
   if (!elements.buildHint) return;
+  if (playfieldMode !== "construction") {
+    elements.buildHint.textContent = "Enter Construction mode and open the Construction Tools menu to begin planning new rooms.";
+    if (elements.blueprintFootnote) {
+      elements.blueprintFootnote.textContent =
+        "Switch to Construction mode from the playfield controls, then open the Construction Tools dropdown to place rooms.";
+    }
+    setBuildMode(false);
+    return;
+  }
   if (designerState.editingRoomId) {
     const room = getRoomById(designerState.editingRoomId);
     const blueprint = designerState.blueprint ?? (room ? getBlueprint(room.type) : null);
@@ -2768,9 +2906,10 @@ const updateBuildGuidance = () => {
       elements.blueprintFootnote.textContent = footnote;
     }
   } else {
-    elements.buildHint.textContent = "Select a room type above to begin construction.";
+    elements.buildHint.textContent = "Open Construction Tools and choose a room type to begin building.";
     if (elements.blueprintFootnote) {
-      elements.blueprintFootnote.textContent = "Pick a room on the Build tab to start construction.";
+      elements.blueprintFootnote.textContent =
+        "Open the Construction Tools dropdown to pick a room blueprint and click the grid to place it.";
     }
   }
 };
@@ -3278,6 +3417,17 @@ const updateQueue = () => {
       meta.appendChild(emergencyBadge);
     }
 
+    const moodSpan = document.createElement("span");
+    moodSpan.textContent = `Mood ${formatMood(patient.mood)}`;
+    meta.appendChild(moodSpan);
+
+    const statusSpan = document.createElement("span");
+    const statusLabel = patient.status
+      ? patient.status.charAt(0).toUpperCase() + patient.status.slice(1)
+      : "Waiting";
+    statusSpan.textContent = `Status ${statusLabel}`;
+    meta.appendChild(statusSpan);
+
     const patience = document.createElement("span");
     patience.textContent = `Patience ${Math.max(0, Math.round(patient.patience))}`;
     meta.appendChild(patience);
@@ -3415,6 +3565,7 @@ const renderBuildOptions = () => {
       </div>
     `;
     button.addEventListener("click", () => {
+      setPlayfieldMode("construction");
       selectedRoom = room;
       setDesignerBlueprint(room, { resetSelections: true });
       highlightBuildSelection(room.id);
@@ -3458,6 +3609,320 @@ const STAFF_ROLE_LABELS = {
 
 const formatStaffRole = (role) => STAFF_ROLE_LABELS[role] ?? role.charAt(0).toUpperCase() + role.slice(1);
 
+const PATIENT_MOOD_LEVELS = [
+  { threshold: 85, label: "Delighted" },
+  { threshold: 70, label: "Content" },
+  { threshold: 55, label: "Wary" },
+  { threshold: 40, label: "Frustrated" },
+  { threshold: 0, label: "Irate" },
+];
+
+const formatMood = (value) => {
+  const mood = clamp(Math.round(value ?? 50), 0, 100);
+  const moodBand = PATIENT_MOOD_LEVELS.find((band) => mood >= band.threshold) ?? PATIENT_MOOD_LEVELS[PATIENT_MOOD_LEVELS.length - 1];
+  return `${moodBand.label} (${mood})`;
+};
+
+const getStaffById = (id) => state.staff.find((member) => member.id === id);
+
+const ensureStaffAIState = (member) => {
+  if (!member) return;
+  if (typeof member.fatigue !== "number") {
+    member.fatigue = 30;
+  }
+  if (typeof member.focus !== "number") {
+    member.focus = 65;
+  }
+  if (typeof member.initiative !== "number") {
+    member.initiative = 1;
+  }
+  if (typeof member.experience !== "number") {
+    member.experience = 1;
+  }
+  if (!member.currentTask) {
+    member.currentTask = null;
+  }
+};
+
+const describeStaffStatus = (member) => {
+  if (!member?.currentTask) {
+    return "Ready for assignment";
+  }
+  if (member.currentTask.type === "break") {
+    return "On break";
+  }
+  if (member.currentTask.type === "treatment") {
+    return `Treating ${member.currentTask.patientName ?? "patient"}`;
+  }
+  return "Busy";
+};
+
+const traitMatches = (trait, patterns) => {
+  if (!trait) return false;
+  return patterns.some((pattern) => pattern.test(trait));
+};
+
+const calculateTraitSpeedBonus = (member) => {
+  if (!member?.trait) return 0;
+  const trait = member.trait;
+  if (traitMatches(trait, [/fast/i, /rapid/i, /efficient/i, /speedy/i])) {
+    return 1.2;
+  }
+  if (traitMatches(trait, [/calm hands/i, /focused/i, /precision/i])) {
+    return 0.8;
+  }
+  return 0;
+};
+
+const calculateTraitComfortBonus = (member) => {
+  if (!member?.trait) return 0;
+  const trait = member.trait;
+  if (traitMatches(trait, [/empathetic/i, /gentle/i, /bedside/i, /patient whisperer/i, /motivator/i])) {
+    return 1.5;
+  }
+  if (traitMatches(trait, [/charismatic/i, /storyteller/i, /improv/i, /banters/i])) {
+    return 1;
+  }
+  return 0;
+};
+
+const allocateStaffTeam = (roles = []) => {
+  if (!roles.length) {
+    return [];
+  }
+  const assignments = [];
+  const usedIds = new Set();
+  for (const role of roles) {
+    const member = state.staff.find(
+      (candidate) =>
+        candidate.role === role &&
+        !usedIds.has(candidate.id) &&
+        (!candidate.currentTask || candidate.currentTask.type === "idle")
+    );
+    if (!member) {
+      return null;
+    }
+    ensureStaffAIState(member);
+    assignments.push(member);
+    usedIds.add(member.id);
+  }
+  return assignments;
+};
+
+const calculateTreatmentDuration = (patient, room, staffTeam) => {
+  const severity = patient.ailment?.severity ?? 1;
+  let base = 6 + severity * 3;
+  base -= Math.min(2.5, state.stats.efficiency / 35);
+  if (patient.isEmergency) {
+    base -= 1.2;
+  }
+  const moraleFactor = 1 - state.stats.morale / 250;
+  base *= clamp(moraleFactor, 0.75, 1.2);
+  const fatiguePenalty = staffTeam.reduce((sum, member) => {
+    ensureStaffAIState(member);
+    const fatigue = member.fatigue ?? 30;
+    return sum + fatigue / 85;
+  }, 0);
+  base += fatiguePenalty;
+  const traitBonus = staffTeam.reduce((sum, member) => sum + calculateTraitSpeedBonus(member), 0);
+  base -= traitBonus;
+  base -= staffTeam.reduce((sum, member) => sum + (member.experience ?? 0) * 0.35, 0);
+  base = Math.max(3, base);
+  const initiativeBonus = staffTeam.reduce((sum, member) => sum + (member.initiative ?? 1) - 1, 0);
+  base *= clamp(1 - initiativeBonus * 0.15, 0.6, 1.1);
+  const focusSwing = staffTeam.reduce((sum, member) => sum + ((member.focus ?? 65) - 65) / 220, 0);
+  base *= clamp(1 - focusSwing, 0.6, 1.15);
+  return Math.round(base);
+};
+
+const startTreatment = (patient, room, staffTeam) => {
+  const blueprint = getBlueprint(room.type);
+  patient.status = "enroute";
+  patient.targetRoomId = room.id;
+  patient.mood = clamp((patient.mood ?? 60) + 4 + state.ambience.welfare, 0, 100);
+  const duration = calculateTreatmentDuration(patient, room, staffTeam);
+  const treatmentId = `treatment-${Date.now()}-${patient.id}`;
+  const treatment = {
+    id: treatmentId,
+    patient,
+    roomId: room.id,
+    roomType: room.type,
+    duration,
+    progress: 0,
+    assignedStaff: staffTeam.map((member) => member.id),
+    severity: patient.ailment?.severity ?? 1,
+    startedAtTick: state.stats.tick,
+    roomName: blueprint?.name ?? room.type,
+  };
+  staffTeam.forEach((member) => {
+    ensureStaffAIState(member);
+    member.currentTask = {
+      type: "treatment",
+      treatmentId,
+      patientName: patient.name,
+      roomName: treatment.roomName,
+      remaining: duration,
+    };
+    member.fatigue = clamp((member.fatigue ?? 30) + 6 + treatment.severity * 1.2, 0, 140);
+  });
+  state.activeTreatments.push(treatment);
+  logEvent(
+    `${patient.name} heads to ${treatment.roomName} with ${staffTeam
+      .map((member) => member.name.split(" ")[0])
+      .join(" & ")}.`,
+    patient.isEmergency ? "warning" : "neutral"
+  );
+  return treatment;
+};
+
+const releaseStaffFromTreatment = (treatment, { rested = false } = {}) => {
+  if (!treatment?.assignedStaff?.length) return;
+  treatment.assignedStaff.forEach((id) => {
+    const member = getStaffById(id);
+    if (!member) return;
+    ensureStaffAIState(member);
+    if (member.currentTask?.treatmentId === treatment.id) {
+      member.currentTask = null;
+    }
+    if (rested) {
+      member.fatigue = clamp((member.fatigue ?? 30) - 12, 0, 120);
+    } else {
+      member.fatigue = clamp((member.fatigue ?? 30) - 4, 0, 130);
+    }
+  });
+};
+
+const finalizeTreatment = (treatment) => {
+  const patient = treatment.patient;
+  const room = getRoomById(treatment.roomId) ?? { type: treatment.roomType };
+  const staffTeam = treatment.assignedStaff
+    .map((id) => getStaffById(id))
+    .filter(Boolean);
+  releaseStaffFromTreatment(treatment);
+  patient.status = "discharged";
+  const outcome = calculateBillingOutcome(patient);
+  state.stats.cash += outcome.netCash;
+  state.stats.revenueToday += outcome.netCash;
+  state.stats.patientsTreated += 1;
+  const reputationBoost = patient.isEmergency ? 2 : 1;
+  state.stats.reputation = clamp(state.stats.reputation + reputationBoost, 0, 100);
+  state.stats.efficiency = clamp(state.stats.efficiency + (patient.isEmergency ? 1 : 0.5), 0, 100);
+  state.stats.cleanliness = clamp(state.stats.cleanliness - (patient.isEmergency ? 1 : 0.5), 0, 100);
+  if (patient.ailment.room === "maternity") {
+    state.stats.reputation = clamp(state.stats.reputation + 2, 0, 100);
+  }
+  if (patient.ailment.room === "pediatrics") {
+    state.stats.reputation = clamp(state.stats.reputation + 1, 0, 100);
+  }
+  if (["clowncare", "holotheatre"].includes(patient.ailment.room)) {
+    state.stats.morale = clamp(state.stats.morale + 2, 0, 100);
+  }
+  if (patient.ailment.room === "zen") {
+    state.stats.morale = clamp(state.stats.morale + 1.5, 0, 100);
+  }
+  if (patient.ailment.room === "burn") {
+    state.stats.cleanliness = clamp(state.stats.cleanliness - 0.5, 0, 100);
+  }
+  state.stats.morale = clamp(state.stats.morale + state.ambience.morale * 0.05, 0, 100);
+  state.stats.reputation = clamp(state.stats.reputation + state.ambience.reputation * 0.05, 0, 100);
+  if (outcome.financeFee) {
+    state.stats.expensesToday += outcome.financeFee;
+    recordLedgerEvent({
+      name: "Card Processing",
+      detail: `${patient.name} fee`,
+      amount: -outcome.financeFee,
+      tag: "Billing",
+    });
+  }
+  if (outcome.plan && !outcome.plan.preview) {
+    addInstallmentPlan(outcome.plan);
+  }
+  recordBilling(patient, outcome);
+  const staffNames = staffTeam.length ? ` (${staffTeam.map((m) => m.name.split(" ")[0]).join(" & ")})` : "";
+  let logMessage = `${patient.name} completed treatment for ${patient.ailment.name} in ${treatment.roomName}${staffNames}. Charge ¤${formatCurrency(
+    outcome.charge
+  )} via ${outcome.methodLabel}.`;
+  if (outcome.receivable) {
+    logMessage += ` ¤${formatCurrency(outcome.receivable)} scheduled for installments.`;
+  }
+  logEvent(logMessage, "positive");
+  return true;
+};
+
+const updateActiveTreatments = () => {
+  if (!state.activeTreatments.length) return false;
+  const remainingTreatments = [];
+  let changed = false;
+  state.activeTreatments.forEach((treatment) => {
+    const patient = treatment.patient;
+    if (patient.status === "enroute") {
+      patient.status = "treatment";
+    }
+    patient.mood = clamp((patient.mood ?? 60) + 0.3 + state.ambience.welfare * 0.04, 0, 110);
+    treatment.progress += 1 + state.stats.efficiency / 120;
+    const staffTeam = treatment.assignedStaff
+      .map((id) => getStaffById(id))
+      .filter(Boolean);
+    staffTeam.forEach((member) => {
+      ensureStaffAIState(member);
+      if (member.currentTask?.treatmentId === treatment.id) {
+        member.currentTask.remaining = Math.max(0, treatment.duration - treatment.progress);
+        member.fatigue = clamp((member.fatigue ?? 30) + 0.4 + treatment.severity * 0.15, 0, 150);
+      }
+    });
+    if (treatment.progress >= treatment.duration) {
+      changed = finalizeTreatment(treatment) || changed;
+    } else {
+      remainingTreatments.push(treatment);
+    }
+  });
+  state.activeTreatments = remainingTreatments;
+  if (changed) {
+    renderRoster();
+    updateStats();
+  }
+  return changed;
+};
+
+const updateStaffAI = () => {
+  let rosterChanged = false;
+  const hasStaffRoom = hasRoomBuilt("staffroom");
+  state.staff.forEach((member) => {
+    ensureStaffAIState(member);
+    if (!member.currentTask) {
+      const recoveryRate = hasStaffRoom ? 1.4 : 0.6;
+      const oldFatigue = member.fatigue;
+      member.fatigue = clamp(oldFatigue - recoveryRate, 0, 140);
+      if (oldFatigue !== member.fatigue) {
+        rosterChanged = true;
+      }
+      if (member.fatigue > 95 && hasStaffRoom) {
+        member.currentTask = {
+          type: "break",
+          remaining: Math.min(8, 4 + Math.round(member.fatigue / 12)),
+        };
+        logEvent(`${member.name} takes a breather in the staff lounge.`, "neutral");
+        rosterChanged = true;
+      }
+    } else if (member.currentTask.type === "break") {
+      member.currentTask.remaining -= 1;
+      const before = member.fatigue;
+      member.fatigue = clamp(member.fatigue - 2.5, 0, 120);
+      if (before !== member.fatigue) {
+        rosterChanged = true;
+      }
+      if (member.currentTask.remaining <= 0 || member.fatigue < 30) {
+        member.currentTask = null;
+        rosterChanged = true;
+      }
+    }
+  });
+  if (rosterChanged) {
+    renderRoster();
+  }
+  return rosterChanged;
+};
+
 const getTotalAmenityCount = (amenityType) =>
   state.rooms.reduce((sum, room) => {
     if (!room.decorations?.length) return sum;
@@ -3485,6 +3950,10 @@ const generateCandidate = () => {
   const salary = Math.floor(
     blueprint.salary[0] + Math.random() * (blueprint.salary[1] - blueprint.salary[0])
   );
+  const baseFatigue = Math.floor(Math.random() * 25) + 20;
+  const focus = 60 + Math.random() * 25;
+  const initiative = 0.7 + Math.random() * 0.6;
+  const experience = Math.floor(Math.random() * 3);
   return {
     id: staffIdCounter++,
     name,
@@ -3492,6 +3961,11 @@ const generateCandidate = () => {
     trait,
     salary,
     morale: 80,
+    fatigue: baseFatigue,
+    focus,
+    initiative,
+    experience,
+    currentTask: null,
   };
 };
 
@@ -3516,11 +3990,17 @@ const renderCandidates = () => {
 const renderRoster = () => {
   elements.staffRoster.innerHTML = "";
   state.staff.forEach((member) => {
+    ensureStaffAIState(member);
     const li = document.createElement("li");
     const role = formatStaffRole(member.role);
     const morale = Math.round(member.morale);
-    const trait = member.trait ? ` • Trait: ${member.trait}` : "";
-    li.textContent = `${member.name} (${role}) • Morale ${morale}${trait}`;
+    const fatigue = Math.round(member.fatigue ?? 0);
+    const parts = [`${member.name} (${role})`, `Morale ${morale}`, `Fatigue ${fatigue}`];
+    if (member.trait) {
+      parts.push(`Trait: ${member.trait}`);
+    }
+    parts.push(describeStaffStatus(member));
+    li.textContent = parts.join(" • ");
     elements.staffRoster.appendChild(li);
   });
 };
@@ -3775,7 +4255,14 @@ const hireStaff = (candidateId) => {
     return;
   }
   state.stats.cash -= candidate.salary * 5;
-  state.staff.push({ ...candidate, assignedRoom: null });
+  const staffMember = {
+    ...candidate,
+    assignedRoom: null,
+    currentTask: null,
+    fatigue: candidate.fatigue ?? 30,
+  };
+  ensureStaffAIState(staffMember);
+  state.staff.push(staffMember);
   state.candidates = state.candidates.filter((c) => c.id !== candidateId);
   state.candidates.push(generateCandidate());
   logEvent(`Hired ${candidate.name}, a ${formatStaffRole(candidate.role)}.`, "positive");
@@ -3992,6 +4479,8 @@ const createPatient = ({ ailment = randomFrom(ailments), emergency = false } = {
   if (hasRoomBuilt("zen")) {
     patience += 3;
   }
+  const resilience = 0.8 + Math.random() * 0.6;
+  const mood = clamp(55 + Math.random() * 25 + state.ambience.welfare, 0, 100);
   return {
     id: patientIdCounter++,
     name: randomFrom(patientNames),
@@ -4000,11 +4489,18 @@ const createPatient = ({ ailment = randomFrom(ailments), emergency = false } = {
     profile,
     isEmergency: emergency,
     blockedBy: null,
+    status: "waiting",
+    mood,
+    resilience,
+    lastAmenityTick: 0,
+    arrivalTick: state.stats.tick,
+    boredom: 0,
   };
 };
 
 const spawnPatient = ({ emergency = false, ailment, announce = emergency } = {}) => {
   const patient = createPatient({ ailment: ailment || randomFrom(emergency ? emergencyCases : ailments), emergency });
+  patient.status = emergency ? "critical" : "waiting";
   if (emergency) {
     state.queue.unshift(patient);
   } else {
@@ -4026,22 +4522,45 @@ const adjustStaffMorale = () => {
   }
   const moraleDelta = state.rooms.some((room) => room.type === "staffroom") ? 1 : -1;
   state.staff.forEach((member) => {
-    member.morale = Math.max(0, Math.min(100, member.morale + moraleDelta));
+    ensureStaffAIState(member);
+    const fatiguePenalty = Math.max(0, ((member.fatigue ?? 30) - 55) / 15);
+    const comfortBoost = calculateTraitComfortBonus(member) * 0.2;
+    const overtimePenalty = elements.policies.overtime.checked ? 0.5 : 0;
+    member.morale = clamp(
+      member.morale + moraleDelta + comfortBoost - fatiguePenalty - overtimePenalty,
+      0,
+      100
+    );
   });
-  state.stats.morale = Math.round(
-    state.staff.reduce((acc, cur) => acc + cur.morale, 0) / state.staff.length
-  );
+  const averageMorale = state.staff.reduce((acc, cur) => acc + cur.morale, 0) / state.staff.length;
+  state.stats.morale = Math.round(averageMorale);
 };
 
 const processQueue = () => {
-  if (!state.queue.length) return;
+  if (!state.queue.length) return false;
   const patient = state.queue[0];
+  if (!patient) return false;
+  if (patient.status !== "critical") {
+    patient.status = "waiting";
+  }
   const treatmentRoom = state.rooms.find((room) => room.type === patient.ailment.room);
-  if (!treatmentRoom) return;
-  const hasStaff = treatmentRoom.roleRequired.every((role) =>
-    state.staff.some((member) => member.role === role)
-  );
-  if (!hasStaff) return;
+  if (!treatmentRoom) {
+    if (patient.blockedBy !== "room") {
+      patient.blockedBy = "room";
+      logEvent(`${patient.name} is waiting for a ${patient.ailment.room} to be built.`, "warning");
+    }
+    patient.mood = clamp((patient.mood ?? 60) - 1.2, 0, 100);
+    return false;
+  }
+  const staffTeam = allocateStaffTeam(treatmentRoom.roleRequired);
+  if (!staffTeam) {
+    if (patient.blockedBy !== "staff") {
+      logEvent(`${patient.name} is waiting for qualified staff to become available.`, "warning");
+    }
+    patient.blockedBy = "staff";
+    patient.mood = clamp((patient.mood ?? 60) - 0.8, 0, 100);
+    return false;
+  }
   const blueprint = getBlueprint(treatmentRoom.type);
   const severityCapacity =
     treatmentRoom.severityCapacity ??
@@ -4054,57 +4573,14 @@ const processQueue = () => {
         "warning"
       );
     }
-    return;
+    patient.mood = clamp((patient.mood ?? 60) - 1.5, 0, 100);
+    return false;
   }
   patient.blockedBy = null;
-  const outcome = calculateBillingOutcome(patient);
   state.queue.shift();
-  state.stats.cash += outcome.netCash;
-  state.stats.revenueToday += outcome.netCash;
-  state.stats.patientsTreated += 1;
-  const reputationBoost = patient.isEmergency ? 2 : 1;
-  state.stats.reputation = clamp(state.stats.reputation + reputationBoost, 0, 100);
-  state.stats.efficiency = clamp(state.stats.efficiency + (patient.isEmergency ? 1 : 0.5), 0, 100);
-  state.stats.cleanliness = clamp(state.stats.cleanliness - (patient.isEmergency ? 1 : 0.5), 0, 100);
-  if (patient.ailment.room === "maternity") {
-    state.stats.reputation = clamp(state.stats.reputation + 2, 0, 100);
-  }
-  if (patient.ailment.room === "pediatrics") {
-    state.stats.reputation = clamp(state.stats.reputation + 1, 0, 100);
-  }
-  if (["clowncare", "holotheatre"].includes(patient.ailment.room)) {
-    state.stats.morale = clamp(state.stats.morale + 2, 0, 100);
-  }
-  if (patient.ailment.room === "zen") {
-    state.stats.morale = clamp(state.stats.morale + 1.5, 0, 100);
-  }
-  if (patient.ailment.room === "burn") {
-    state.stats.cleanliness = clamp(state.stats.cleanliness - 0.5, 0, 100);
-  }
-  state.stats.morale = clamp(state.stats.morale + state.ambience.morale * 0.05, 0, 100);
-  state.stats.reputation = clamp(state.stats.reputation + state.ambience.reputation * 0.05, 0, 100);
-  if (outcome.financeFee) {
-    state.stats.expensesToday += outcome.financeFee;
-    recordLedgerEvent({
-      name: "Card Processing",
-      detail: `${patient.name} fee`,
-      amount: -outcome.financeFee,
-      tag: "Billing",
-    });
-  }
-  if (outcome.plan && !outcome.plan.preview) {
-    addInstallmentPlan(outcome.plan);
-  }
-  recordBilling(patient, outcome);
-  let logMessage = `${patient.name} treated for ${patient.ailment.name} (${patient.profile.label}). Charge ¤${formatCurrency(
-    outcome.charge
-  )} via ${outcome.methodLabel}.`;
-  if (outcome.receivable) {
-    logMessage += ` ¤${formatCurrency(outcome.receivable)} scheduled for installments.`;
-  }
-  logEvent(logMessage, "positive");
+  startTreatment(patient, treatmentRoom, staffTeam);
   updateStats();
-  updateQueue();
+  return true;
 };
 
 const handleEmergencyEvents = () => {
@@ -4117,7 +4593,8 @@ const handleEmergencyEvents = () => {
 };
 
 const handlePatientPatience = () => {
-  let changed = false;
+  const hadPatients = state.queue.length > 0;
+  let changed = hadPatients;
   const triageSupport = hasRoomBuilt("triage") && countStaffByRole("nurse") && countStaffByRole("assistant");
   const entertainerSupport = hasRoomBuilt("clowncare") && countStaffByRole("entertainer");
   const theatreSupport = hasRoomBuilt("holotheatre") && countStaffByRole("entertainer");
@@ -4129,6 +4606,7 @@ const handlePatientPatience = () => {
   const hydrationSupport = getTotalAmenityCount("hydration");
   state.queue = state.queue.filter((patient) => {
     let patienceDrop = patient.isEmergency ? 6 : 4;
+    let moodShift = 0;
     if (triageSupport) {
       patienceDrop -= 1;
     }
@@ -4149,25 +4627,58 @@ const handlePatientPatience = () => {
     }
     patienceDrop -= state.ambience.environment * 0.3;
     patienceDrop = Math.max(1, patienceDrop);
+    const resilience = patient.resilience ?? 1;
+    patienceDrop /= resilience;
     patient.patience -= patienceDrop;
+    moodShift -= patienceDrop * 0.35;
+    patient.boredom = (patient.boredom ?? 0) + 1;
     if (hasRoomBuilt("cafeteria")) {
       patient.patience += 1;
+      moodShift += 0.5;
     }
     if (giftSupport) {
       patient.patience += 0.5;
+      moodShift += 0.4;
     }
     if (snackSupport) {
       patient.patience += Math.min(2, snackSupport * 0.6);
+      moodShift += Math.min(2, snackSupport * 0.3);
     }
     if (hydrationSupport) {
       patient.patience += Math.min(1, hydrationSupport * 0.4);
+      moodShift += Math.min(1, hydrationSupport * 0.25);
     }
     if (zenSupport) {
       patient.patience += 0.4;
+      moodShift += 0.6;
     }
-    patient.patience += state.ambience.welfare * 0.3;
-    patient.patience += state.ambience.morale * 0.15;
+    const welfareBoost = state.ambience.welfare * 0.3;
+    const moraleBoost = state.ambience.morale * 0.15;
+    patient.patience += welfareBoost;
+    patient.patience += moraleBoost;
+    moodShift += (welfareBoost + moraleBoost) * 0.25;
     patient.patience = clamp(patient.patience, 0, 180);
+    const amenityCooldown = state.stats.tick - (patient.lastAmenityTick ?? 0);
+    const amenityOptions = [];
+    if (hasRoomBuilt("giftshop")) {
+      amenityOptions.push({ id: "giftshop", label: "gift shop", patience: 2, mood: 4 });
+    }
+    if (hasRoomBuilt("holotheatre")) {
+      amenityOptions.push({ id: "holotheatre", label: "holotheatre", patience: 3, mood: 6 });
+    }
+    if (hasRoomBuilt("clowncare")) {
+      amenityOptions.push({ id: "clowncare", label: "clown care", patience: 2.5, mood: 5 });
+    }
+    if (amenityOptions.length && patient.boredom > 4 && amenityCooldown > 5 && Math.random() < 0.12) {
+      const choice = randomFrom(amenityOptions);
+      patient.lastAmenityTick = state.stats.tick;
+      patient.boredom = 0;
+      patient.patience = clamp(patient.patience + choice.patience, 0, 200);
+      patient.mood = clamp((patient.mood ?? 60) + choice.mood + state.ambience.environment * 0.2, 0, 120);
+      logEvent(`${patient.name} enjoys the ${choice.label} while waiting, feeling calmer.`, "neutral");
+      changed = true;
+    }
+    patient.mood = clamp((patient.mood ?? 60) + moodShift, 0, 120);
     if (patient.patience <= 0) {
       changed = true;
       let penalty = patient.isEmergency ? 4 : 2;
@@ -4203,6 +4714,10 @@ const handleFacilitiesUpkeep = () => {
       state.stats.revenueToday += revenue;
       state.stats.morale = clamp(state.stats.morale + buyers * 0.25, 0, 100);
       state.litter = (state.litter ?? 0) + buyers;
+      state.queue.slice(0, buyers).forEach((patient) => {
+        patient.patience = clamp(patient.patience + 0.8, 0, 200);
+        patient.mood = clamp((patient.mood ?? 60) + 1.5, 0, 120);
+      });
       recordLedgerEvent({
         name: "Concessions",
         detail: `${buyers} snack${buyers > 1 ? "s" : ""} sold`,
@@ -4279,6 +4794,7 @@ const handleFacilitiesUpkeep = () => {
     if (assistantCount) {
       state.queue.forEach((patient) => {
         patient.patience = clamp(patient.patience + assistantCount * 0.4, 0, 160);
+        patient.mood = clamp((patient.mood ?? 60) + assistantCount * 0.25, 0, 120);
       });
       queueAdjusted = true;
     }
@@ -4292,18 +4808,31 @@ const handleFacilitiesUpkeep = () => {
   if (hasRoomBuilt("holotheatre") && entertainerCount) {
     state.queue.forEach((patient) => {
       patient.patience = clamp(patient.patience + 0.6 * entertainerCount, 0, 180);
+      patient.mood = clamp((patient.mood ?? 60) + entertainerCount * 0.8, 0, 120);
     });
     queueAdjusted = true;
   }
   if (hasRoomBuilt("zen") && therapistCount) {
     state.stats.morale = clamp(state.stats.morale + therapistCount * 0.5, 0, 100);
+    state.queue.forEach((patient) => {
+      patient.mood = clamp((patient.mood ?? 60) + therapistCount * 0.4, 0, 120);
+    });
+    queueAdjusted = true;
   }
   if (hasRoomBuilt("gourmet") && chefCount) {
     state.stats.morale = clamp(state.stats.morale + chefCount * 0.4, 0, 100);
     state.stats.cleanliness = clamp(state.stats.cleanliness + 0.1 * chefCount, 0, 100);
+    state.queue.forEach((patient) => {
+      patient.mood = clamp((patient.mood ?? 60) + chefCount * 0.2, 0, 120);
+    });
+    queueAdjusted = true;
   }
   if (hasRoomBuilt("giftshop") && assistantCount) {
     state.stats.reputation = clamp(state.stats.reputation + 0.15 * assistantCount, 0, 100);
+    state.queue.forEach((patient) => {
+      patient.mood = clamp((patient.mood ?? 60) + assistantCount * 0.2, 0, 120);
+    });
+    queueAdjusted = true;
   }
   if (hasRoomBuilt("securityoffice") && securityCount) {
     state.stats.efficiency = clamp(state.stats.efficiency + securityCount * 0.2, 0, 100);
@@ -4429,12 +4958,14 @@ const tick = () => {
   }
   handleEmergencyEvents();
   const patienceChanged = handlePatientPatience();
-  processQueue();
+  const treatmentsChanged = updateActiveTreatments();
+  updateStaffAI();
+  const assigned = processQueue();
   const facilitiesTouched = handleFacilitiesUpkeep();
   adjustStaffMorale();
   decayMetrics();
   recalculateAmbience();
-  if (patienceChanged || facilitiesTouched) {
+  if (patienceChanged || facilitiesTouched || assigned || treatmentsChanged) {
     updateQueue();
   }
   updateDailyReport();
@@ -4495,7 +5026,11 @@ const setupMenuRail = () => {
     option.addEventListener("click", () => {
       const targetTab = option.dataset.tabTarget;
       const panelSelector = option.dataset.panel;
-      if (targetTab) {
+      if (targetTab === "build") {
+        setPlayfieldMode("construction");
+        setBuildDropdownOpen(true);
+        updateMenuOptions("build");
+      } else if (targetTab) {
         const targetButton = document.querySelector(`.tab-button[data-tab="${targetTab}"]`);
         if (targetButton && !targetButton.classList.contains("active")) {
           targetButton.click();
@@ -4523,8 +5058,12 @@ const setupTabs = () => {
       });
       updateMenuOptions(button.dataset.tab);
       if (button.dataset.tab === "build") {
+        setPlayfieldMode("construction");
         updateBuildGuidance();
       } else {
+        if (playfieldMode === "construction") {
+          setPlayfieldMode("mainland");
+        }
         clearBuildSelection();
       }
     });
@@ -4571,6 +5110,9 @@ const init = () => {
   renderPropertyMarket();
   setupTabs();
   setupMenuRail();
+  setupPlayfieldModes();
+  setupBuildDropdown();
+  setPlayfieldMode("mainland");
   refreshCandidates();
   renderCandidates();
   renderRoster();
@@ -4586,6 +5128,14 @@ const init = () => {
   logEvent("Welcome to Pulse Point Hospital!", "positive");
   document.addEventListener("keydown", (event) => {
     if (event.key === "Escape") {
+      if (isBuildDropdownOpen()) {
+        const activeElement = document.activeElement;
+        const focusInside = activeElement ? buildDropdown?.contains(activeElement) : false;
+        setBuildDropdownOpen(false, { focusToggle: true });
+        if (focusInside) {
+          return;
+        }
+      }
       clearBuildSelection();
     }
   });
