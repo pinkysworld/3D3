@@ -3,7 +3,18 @@ const GRID_HEIGHT = 8;
 const STARTING_CASH = 150000;
 const DAY_TICKS = 60;
 const CANVAS_CELL = 56;
+const ISO_TILE_WIDTH = 96;
+const ISO_TILE_HEIGHT = 48;
+const ISO_TILE_DEPTH = 36;
 const AXIS_LETTERS = "ABCDEFGHIJKLMNOPQRSTUVWXYZ";
+const SAVE_VERSION = 1;
+const SAVE_KEY_PREFIX = "pulsepoint.save.slot.";
+const SAVE_SLOTS = [
+  { id: "slot1", label: "Slot 1" },
+  { id: "slot2", label: "Slot 2" },
+  { id: "slot3", label: "Slot 3" },
+  { id: "slot4", label: "Slot 4" },
+];
 
 const PROPERTY_PARCELS = [
   {
@@ -498,6 +509,15 @@ const roomCatalog = [
     description: "Handles urgent arrivals with crash bays and trauma carts.",
   },
   {
+    id: "ambulancebay",
+    name: "Ambulance Bay",
+    cost: 14000,
+    upkeep: 360,
+    roleRequired: ["paramedic", "security"],
+    reputation: 4,
+    description: "Stages ambulance crews for rapid response to emergencies.",
+  },
+  {
     id: "research",
     name: "Research Lab",
     cost: 18000,
@@ -622,6 +642,7 @@ const baseSeverityMap = {
   surgery: 4,
   icu: 4,
   emergency: 3,
+  ambulancebay: 0,
   cafeteria: 0,
   gourmet: 0,
   giftshop: 0,
@@ -743,6 +764,12 @@ const staffCatalog = [
     namePool: ["Axel Guard", "Mira Watch", "Jett Shield", "Tova Brace"],
     salary: [550, 750],
     traits: ["Alert", "Crowd control", "Cool head", "Swift"],
+  },
+  {
+    role: "paramedic",
+    namePool: ["River Dash", "Emi Lights", "Gabe Siren", "Nia Pulse"],
+    salary: [620, 820],
+    traits: ["Rapid triage", "Calm under pressure", "Efficient driver", "Logistics ace"],
   },
   {
     role: "dentist",
@@ -1011,6 +1038,30 @@ const objectives = [
   },
 ];
 
+const hydrateObjectives = (savedList) => {
+  const savedMap = new Map((savedList ?? []).map((entry) => [entry.id, entry]));
+  const hydrated = objectives.map((objective) => {
+    const saved = savedMap.get(objective.id);
+    return {
+      id: objective.id,
+      text: objective.text,
+      condition: objective.condition,
+      completed: Boolean(saved?.completed ?? objective.completed ?? false),
+    };
+  });
+  (savedList ?? []).forEach((entry) => {
+    if (!objectives.some((objective) => objective.id === entry.id)) {
+      hydrated.push({
+        id: entry.id,
+        text: entry.text ?? entry.id,
+        condition: () => false,
+        completed: Boolean(entry.completed),
+      });
+    }
+  });
+  return hydrated;
+};
+
 const deepClone = (input) => JSON.parse(JSON.stringify(input));
 
 const clamp = (value, min, max) => Math.max(min, Math.min(max, value));
@@ -1096,8 +1147,62 @@ const drawRoundedRect = (ctx, x, y, width, height, radius) => {
   ctx.closePath();
 };
 
+const orientIsoPoint = (x, y, rotation) => {
+  const rot = ((rotation % 4) + 4) % 4;
+  switch (rot) {
+    case 1:
+      return { x: GRID_HEIGHT - y, y: x };
+    case 2:
+      return { x: GRID_WIDTH - x, y: GRID_HEIGHT - y };
+    case 3:
+      return { x: y, y: GRID_WIDTH - x };
+    default:
+      return { x, y };
+  }
+};
+
+const projectIsoPoint = ({ x, y }) => ({
+  x: (x - y) * (ISO_TILE_WIDTH / 2),
+  y: (x + y) * (ISO_TILE_HEIGHT / 2),
+});
+
+const getIsoFootprintCorners = (x, y, width, height, rotation) => {
+  const top = projectIsoPoint(orientIsoPoint(x, y, rotation));
+  const right = projectIsoPoint(orientIsoPoint(x + width, y, rotation));
+  const bottom = projectIsoPoint(orientIsoPoint(x + width, y + height, rotation));
+  const left = projectIsoPoint(orientIsoPoint(x, y + height, rotation));
+  return { top, right, bottom, left };
+};
+
+const getIsoTileCorners = (x, y, rotation) => getIsoFootprintCorners(x, y, 1, 1, rotation);
+
+const isoEdgeDirections = [
+  { primary: { dx: 1, dy: 0 }, secondary: { dx: 0, dy: 1 } },
+  { primary: { dx: 0, dy: 1 }, secondary: { dx: -1, dy: 0 } },
+  { primary: { dx: -1, dy: 0 }, secondary: { dx: 0, dy: -1 } },
+  { primary: { dx: 0, dy: -1 }, secondary: { dx: 1, dy: 0 } },
+];
+
+const isoEdgeCornerMap = [
+  { primary: ["right", "bottom"], secondary: ["bottom", "left"] },
+  { primary: ["bottom", "left"], secondary: ["left", "top"] },
+  { primary: ["left", "top"], secondary: ["top", "right"] },
+  { primary: ["top", "right"], secondary: ["right", "bottom"] },
+];
+
 const createPropertyState = () =>
   PROPERTY_PARCELS.map((parcel) => ({ ...parcel, owned: parcel.cost === 0 }));
+
+const mergeCollectionById = (base, saved = []) => {
+  const savedMap = new Map((saved ?? []).map((entry) => [entry.id, entry]));
+  const merged = base.map((entry) => ({ ...entry, ...(savedMap.get(entry.id) ?? {}) }));
+  (saved ?? []).forEach((entry) => {
+    if (!merged.some((item) => item.id === entry.id)) {
+      merged.push(entry);
+    }
+  });
+  return merged;
+};
 
 const getParcelAt = (x, y) =>
   state.properties.find(
@@ -1124,7 +1229,7 @@ const state = {
   marketingEffects: [],
   projects: deepClone(researchProjects),
   campaigns: deepClone(marketingCampaigns),
-  objectives: deepClone(objectives),
+  objectives: hydrateObjectives(),
   queue: [],
   billingRecords: [],
   loans: [],
@@ -1147,12 +1252,56 @@ const state = {
     expensesToday: 0,
     environmentScore: 55,
     welfareScore: 55,
+    arrivalsToday: 0,
+  },
+  canvasView: {
+    projection: "blueprint",
+    focus: "hospital",
+    selectedRoomId: null,
+    showWalls: true,
+    rotation: 0,
+    overlay: "layout",
+  },
+  emergencyServices: {
+    departmentReady: false,
+    bayCount: 0,
+    capacity: 0,
+    activeFleet: 0,
+    crewReady: false,
+    paramedicCount: 0,
+    autoDispatch: true,
+    cooldown: 0,
+    pendingResponses: [],
+    dispatchesToday: 0,
   },
 };
 
 const elements = {
   grid: document.querySelector("#grid"),
   hospitalCanvas: document.querySelector("#hospital-canvas"),
+  canvasView: {
+    toolbar: document.querySelector(".canvas-toolbar"),
+    projectionButtons: Array.from(document.querySelectorAll(".view-toggle")),
+    focusSelect: document.querySelector("#view-focus"),
+    toggleWalls: document.querySelector("#toggle-walls"),
+    rotateView: document.querySelector("#rotate-view"),
+    ribbonButtons: Array.from(document.querySelectorAll(".ribbon-button")),
+    ribbonPanels: Array.from(document.querySelectorAll(".ribbon-panel")),
+    overlayStats: {
+      rooms: document.querySelector("#overlay-stat-rooms"),
+      parcels: document.querySelector("#overlay-stat-parcels"),
+      plots: document.querySelector("#overlay-stat-plots"),
+      queue: document.querySelector("#overlay-stat-queue"),
+      severity: document.querySelector("#overlay-stat-severity"),
+      emergencyShare: document.querySelector("#overlay-stat-emergency"),
+      staff: document.querySelector("#overlay-stat-staff"),
+      roles: document.querySelector("#overlay-stat-roles"),
+      morale: document.querySelector("#overlay-stat-morale"),
+      environment: document.querySelector("#overlay-stat-environment"),
+      welfare: document.querySelector("#overlay-stat-welfare"),
+      decor: document.querySelector("#overlay-stat-decor"),
+    },
+  },
   axisX: document.querySelector("#axis-x"),
   axisY: document.querySelector("#axis-y"),
   buildOptions: document.querySelector("#build-options"),
@@ -1177,6 +1326,40 @@ const elements = {
   dailyReport: document.querySelector("#daily-report"),
   objectives: document.querySelector("#objectives"),
   billingLedger: document.querySelector("#billing-ledger"),
+  overviewDropdown: {
+    toggle: document.querySelector(".overview-toggle"),
+    panel: document.querySelector("#overview-panel"),
+  },
+  reports: {
+    tabs: Array.from(document.querySelectorAll(".report-tab")),
+    panels: Array.from(document.querySelectorAll(".report-panel")),
+    fields: {
+      cash: document.querySelector("#report-cash"),
+      revenue: document.querySelector("#report-revenue"),
+      expenses: document.querySelector("#report-expenses"),
+      net: document.querySelector("#report-net"),
+      margin: document.querySelector("#report-margin"),
+      loans: document.querySelector("#report-loans"),
+      receivables: document.querySelector("#report-receivables"),
+      queue: document.querySelector("#report-queue"),
+      emergency: document.querySelector("#report-emergency"),
+      severity: document.querySelector("#report-severity"),
+      patience: document.querySelector("#report-patience"),
+      treated: document.querySelector("#report-treated"),
+      arrivals: document.querySelector("#report-arrivals"),
+      rooms: document.querySelector("#report-rooms"),
+      parcels: document.querySelector("#report-parcels"),
+      staff: document.querySelector("#report-staff"),
+      morale: document.querySelector("#report-morale"),
+      efficiency: document.querySelector("#report-efficiency"),
+      environment: document.querySelector("#report-environment"),
+    },
+  },
+  saves: {
+    container: document.querySelector("#save-slots"),
+    template: document.querySelector("#save-slot-template"),
+    warning: document.querySelector("#save-storage-warning"),
+  },
   finance: {
     loanOffers: document.querySelector("#loan-offers"),
     activeLoans: document.querySelector("#active-loans"),
@@ -1191,7 +1374,30 @@ const elements = {
   },
   policies: {
     fastTrack: document.querySelector("#policy-fast-track"),
+    comfortCare: document.querySelector("#policy-comfort-care"),
     overtime: document.querySelector("#policy-overtime"),
+    mentorship: document.querySelector("#policy-mentorship"),
+    hygiene: document.querySelector("#policy-hygiene-drive"),
+    audit: document.querySelector("#policy-budget-audit"),
+  },
+  policyMenu: {
+    tabs: Array.from(document.querySelectorAll(".policy-tab")),
+    panels: Array.from(document.querySelectorAll(".policy-panel")),
+    summary: document.querySelector("#policy-summary"),
+    summaryList: document.querySelector("#policy-summary ul"),
+  },
+  emergencyServices: {
+    status: document.querySelector("#emergency-status"),
+    department: document.querySelector("#emergency-department"),
+    bays: document.querySelector("#emergency-bays"),
+    crew: document.querySelector("#emergency-crew"),
+    fleet: document.querySelector("#emergency-fleet"),
+    readiness: document.querySelector("#emergency-readiness"),
+    summary: document.querySelector("#emergency-summary"),
+    dispatch: document.querySelector("#dispatch-ambulance"),
+    autoToggle: document.querySelector("#toggle-ambulance-auto"),
+    planDept: document.querySelector("#plan-emergency-room"),
+    planBay: document.querySelector("#plan-ambulance-bay"),
   },
   designer: {
     size: document.querySelector("#designer-size"),
@@ -1215,6 +1421,21 @@ let blueprintBuffer = null;
 let emptyTileSprite = null;
 let lockedTileSprite = null;
 const themedTileCache = new Map();
+const isStorageAvailable = (() => {
+  try {
+    if (typeof localStorage === "undefined") {
+      return false;
+    }
+    const key = "__pulsepoint_storage_test__";
+    localStorage.setItem(key, key);
+    localStorage.removeItem(key);
+    return true;
+  } catch (error) {
+    return false;
+  }
+})();
+
+const isPolicyActive = (policyKey) => Boolean(elements.policies?.[policyKey]?.checked);
 
 const invalidateCanvasCache = () => {
   blueprintBuffer = null;
@@ -1831,6 +2052,17 @@ const roomVisuals = {
       ctx.fillRect(px + 10, py + CANVAS_CELL - 18, CANVAS_CELL - 20, 8);
     },
   },
+  ambulancebay: {
+    color: "#0ea5e9",
+    furniture: (ctx, px, py) => {
+      ctx.fillStyle = "#0f172a";
+      ctx.fillRect(px + 6, py + 10, CANVAS_CELL - 12, CANVAS_CELL - 22);
+      ctx.fillStyle = "#38bdf8";
+      ctx.fillRect(px + CANVAS_CELL / 2 - 14, py + CANVAS_CELL - 22, 28, 12);
+      ctx.fillStyle = "#f97316";
+      ctx.fillRect(px + 10, py + 12, CANVAS_CELL - 20, 8);
+    },
+  },
   cafeteria: {
     color: "#22c55e",
     furniture: (ctx, px, py) => {
@@ -1972,6 +2204,71 @@ const logEvent = (message, tone = "neutral") => {
 };
 
 const formatCurrency = (value) => value.toLocaleString(undefined, { maximumFractionDigits: 0 });
+
+const getSaveSlotLabel = (slotId) => SAVE_SLOTS.find((slot) => slot.id === slotId)?.label ?? slotId;
+
+const getSaveStorageKey = (slotId) => `${SAVE_KEY_PREFIX}${slotId}`;
+
+const sanitizeStateForSave = () => {
+  const clone = JSON.parse(JSON.stringify(state));
+  delete clone.grid;
+  clone.objectives = state.objectives.map(({ id, completed }) => ({ id, completed }));
+  return clone;
+};
+
+const createSavePayload = () => ({
+  version: SAVE_VERSION,
+  timestamp: Date.now(),
+  state: sanitizeStateForSave(),
+  counters: {
+    patientIdCounter,
+    roomIdCounter,
+    staffIdCounter,
+  },
+});
+
+const formatSaveTimestamp = (timestamp) => {
+  if (!timestamp) return "Unknown";
+  const date = new Date(timestamp);
+  if (Number.isNaN(date.getTime())) {
+    return "Unknown";
+  }
+  return date.toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" });
+};
+
+const readSaveSlot = (slotId) => {
+  if (!isStorageAvailable) return null;
+  try {
+    const raw = localStorage.getItem(getSaveStorageKey(slotId));
+    if (!raw) {
+      return null;
+    }
+    const parsed = JSON.parse(raw);
+    if (!parsed || typeof parsed !== "object") {
+      return { corrupted: true };
+    }
+    return parsed;
+  } catch (error) {
+    console.error(`Failed to read save slot ${slotId}`, error);
+    return { corrupted: true };
+  }
+};
+
+const deriveNextIdFromCollection = (collection = []) => {
+  let max = 0;
+  collection.forEach((item) => {
+    const identifier = item?.id;
+    if (typeof identifier === "number" && Number.isFinite(identifier)) {
+      max = Math.max(max, identifier);
+    } else if (typeof identifier === "string") {
+      const match = identifier.match(/(\d+)$/);
+      if (match) {
+        max = Math.max(max, Number(match[1]));
+      }
+    }
+  });
+  return max + 1;
+};
 
 const calculateLoanSchedule = (offer) => {
   const principal = offer.amount;
@@ -2180,11 +2477,846 @@ const getBlueprint = (roomType) => roomCatalog.find((room) => room.id === roomTy
 
 const getRoomById = (roomId) => state.rooms.find((room) => room.id === roomId);
 
+const getFocusedRoom = () => {
+  if (state.canvasView.focus !== "room" || !state.canvasView.selectedRoomId) {
+    return null;
+  }
+  return getRoomById(state.canvasView.selectedRoomId) ?? null;
+};
+
+const shouldDimRoom = (room) => {
+  const focused = getFocusedRoom();
+  return Boolean(focused && room.id !== focused.id);
+};
+
+const overlayPalette = {
+  layout: "#38bdf8",
+  patients: "#f97316",
+  staff: "#34d399",
+  maintenance: "#a855f7",
+};
+
+const getRoomOverlayDescriptor = (room) => {
+  const overlay = state.canvasView.overlay ?? "layout";
+  const color = overlayPalette[overlay] ?? overlayPalette.layout;
+  switch (overlay) {
+    case "patients": {
+      const severity = room.severityCapacity ?? 0;
+      const queueLoad = state.queue.filter((patient) => patient.ailment?.room === room.type).length;
+      const base = 0.12 + (severity * 0.25 + queueLoad * 0.35) / 3;
+      const intensity = clamp(base, 0.12, 1);
+      const badge = queueLoad
+        ? `${queueLoad} waiting`
+        : severity
+        ? `Severity ${severity}`
+        : "Support";
+      return { color, intensity, badge };
+    }
+    case "staff": {
+      const requiredRoles = Array.isArray(room.roleRequired) ? room.roleRequired : [];
+      const availableStaff = requiredRoles.length
+        ? state.staff.filter((member) => requiredRoles.includes(member.role)).length
+        : 0;
+      const ratio = requiredRoles.length ? availableStaff / requiredRoles.length : 0;
+      const base = 0.12 + ratio * 0.4 + requiredRoles.length * 0.12;
+      const intensity = clamp(base, 0.12, 1);
+      const badge = requiredRoles.length ? `${availableStaff}/${requiredRoles.length} staff` : "Support";
+      return { color, intensity, badge };
+    }
+    case "maintenance": {
+      const decor = room.decorations?.length ?? 0;
+      const env = room.environmentBoost ?? 0;
+      const welfare = room.welfareBoost ?? 0;
+      const base = 0.12 + (decor * 0.18 + (env + welfare) * 0.08) / 2;
+      const intensity = clamp(base, 0.12, 1);
+      const totalBoost = Math.round((env ?? 0) + (welfare ?? 0));
+      const badge = decor
+        ? `${decor} decor`
+        : totalBoost > 0
+        ? `Boost +${totalBoost}`
+        : "Needs love";
+      return { color, intensity, badge };
+    }
+    case "layout":
+    default: {
+      const area = (room.width ?? 1) * (room.height ?? 1);
+      const base = area / 18;
+      const intensity = clamp(base, 0.12, 1);
+      const badge = `${area} tile${area === 1 ? "" : "s"}`;
+      return { color, intensity, badge };
+    }
+  }
+};
+
+const drawBlueprintOverlayBadge = (ctx, room, overlay) => {
+  const badge = overlay?.badge;
+  if (!badge) return;
+  ctx.save();
+  const originX = room.x * CANVAS_CELL + 10;
+  const originY = room.y * CANVAS_CELL + 10;
+  const availableWidth = room.width * CANVAS_CELL - 20;
+  if (availableWidth <= 24) {
+    ctx.restore();
+    return;
+  }
+  ctx.font = "11px 'Segoe UI', sans-serif";
+  const metrics = ctx.measureText(badge);
+  const paddingX = 8;
+  const width = Math.min(Math.max(40, metrics.width + paddingX * 2), availableWidth);
+  const height = 18;
+  drawRoundedRect(ctx, originX, originY, width, height, 8);
+  ctx.fillStyle = "rgba(15, 23, 42, 0.78)";
+  ctx.fill();
+  ctx.strokeStyle = withAlpha(overlay.color, 0.85);
+  ctx.stroke();
+  ctx.fillStyle = "rgba(248, 250, 252, 0.92)";
+  ctx.textAlign = "center";
+  ctx.textBaseline = "middle";
+  ctx.fillText(badge, originX + width / 2, originY + height / 2 + 0.5);
+  ctx.restore();
+};
+
+const drawBlueprintOverlay = (ctx, room, overlay, dimmed) => {
+  if (!overlay) return;
+  ctx.save();
+  const baseAlpha = dimmed ? 0.12 : 0.18;
+  const alpha = clamp(baseAlpha + overlay.intensity * 0.3, 0, 0.75);
+  ctx.globalAlpha = alpha;
+  ctx.fillStyle = overlay.color;
+  ctx.fillRect(
+    room.x * CANVAS_CELL + 4,
+    room.y * CANVAS_CELL + 4,
+    room.width * CANVAS_CELL - 8,
+    room.height * CANVAS_CELL - 8
+  );
+  ctx.restore();
+};
+
+const drawIsometricOverlay = (ctx, room, overlay, rotation, { dimmed, focused }) => {
+  if (!overlay) return;
+  const corners = getIsoFootprintCorners(room.x, room.y, room.width, room.height, rotation);
+  ctx.save();
+  const baseAlpha = dimmed ? 0.1 : 0.18;
+  const alpha = clamp(baseAlpha + overlay.intensity * 0.25, 0, 0.6);
+  ctx.globalAlpha = alpha;
+  ctx.beginPath();
+  ctx.moveTo(corners.top.x, corners.top.y);
+  ctx.lineTo(corners.right.x, corners.right.y);
+  ctx.lineTo(corners.bottom.x, corners.bottom.y);
+  ctx.lineTo(corners.left.x, corners.left.y);
+  ctx.closePath();
+  ctx.fillStyle = overlay.color;
+  ctx.fill();
+  ctx.restore();
+  if (!overlay.badge) return;
+  const centerX = (corners.top.x + corners.right.x + corners.bottom.x + corners.left.x) / 4;
+  const centerY =
+    (corners.top.y + corners.right.y + corners.bottom.y + corners.left.y) / 4 +
+    (focused ? ISO_TILE_DEPTH * 0.2 : -ISO_TILE_DEPTH * 0.35);
+  ctx.save();
+  ctx.font = "12px 'Segoe UI', sans-serif";
+  const metrics = ctx.measureText(overlay.badge);
+  const paddingX = 10;
+  const width = Math.min(Math.max(54, metrics.width + paddingX * 2), 160);
+  const height = 22;
+  drawRoundedRect(ctx, centerX - width / 2, centerY - height / 2, width, height, 10);
+  ctx.fillStyle = "rgba(15, 23, 42, 0.82)";
+  ctx.fill();
+  ctx.strokeStyle = withAlpha(overlay.color, 0.85);
+  ctx.stroke();
+  ctx.fillStyle = "rgba(248, 250, 252, 0.95)";
+  ctx.textAlign = "center";
+  ctx.textBaseline = "middle";
+  ctx.fillText(overlay.badge, centerX, centerY + 1);
+  ctx.restore();
+};
+
+const updateCanvasFocusOptions = () => {
+  const select = elements.canvasView?.focusSelect;
+  if (!select) return;
+  const previousValue = state.canvasView.selectedRoomId;
+  const previousFocus = state.canvasView.focus;
+  select.innerHTML = "";
+  const defaultOption = document.createElement("option");
+  defaultOption.value = "hospital";
+  defaultOption.textContent = "Whole hospital";
+  select.appendChild(defaultOption);
+  let hasSelection = false;
+  state.rooms.forEach((room) => {
+    const blueprint = getBlueprint(room.type);
+    const option = document.createElement("option");
+    option.value = room.id;
+    option.textContent = blueprint?.name ?? room.type;
+    if (previousFocus === "room" && room.id === previousValue) {
+      option.selected = true;
+      hasSelection = true;
+    }
+    select.appendChild(option);
+  });
+  if (previousFocus === "room") {
+    if (!hasSelection) {
+      state.canvasView.focus = "hospital";
+      state.canvasView.selectedRoomId = null;
+      select.value = "hospital";
+    } else {
+      select.value = previousValue;
+    }
+  } else {
+    select.value = "hospital";
+  }
+};
+
+const isSameRoomTile = (x, y, dx, dy, room) => {
+  const nx = x + dx;
+  const ny = y + dy;
+  if (nx < 0 || ny < 0 || nx >= GRID_WIDTH || ny >= GRID_HEIGHT) {
+    return false;
+  }
+  return state.grid[ny][nx] === room;
+};
+
+const updateProjectionButtons = () => {
+  const buttons = elements.canvasView?.projectionButtons ?? [];
+  buttons.forEach((button) => {
+    const projection = button.dataset.projection;
+    const isActive = projection === state.canvasView.projection;
+    button.classList.toggle("active", isActive);
+    button.setAttribute("aria-pressed", isActive ? "true" : "false");
+  });
+  if (elements.hospitalCanvas) {
+    elements.hospitalCanvas.dataset.projection = state.canvasView.projection;
+  }
+};
+
+const updateWallsButton = () => {
+  const button = elements.canvasView?.toggleWalls;
+  if (!button) return;
+  const isIso = state.canvasView.projection === "isometric";
+  button.disabled = !isIso;
+  button.setAttribute("aria-disabled", isIso ? "false" : "true");
+  button.setAttribute("aria-pressed", state.canvasView.showWalls ? "true" : "false");
+  button.textContent = state.canvasView.showWalls ? "Hide walls" : "Show walls";
+};
+
+const updateRotateButton = () => {
+  const button = elements.canvasView?.rotateView;
+  if (!button) return;
+  const directions = ["NE", "SE", "SW", "NW"];
+  const label = directions[state.canvasView.rotation % directions.length];
+  const isIso = state.canvasView.projection === "isometric";
+  button.disabled = !isIso;
+  button.setAttribute("aria-disabled", isIso ? "false" : "true");
+  button.textContent = `Rotate view (${label})`;
+};
+
+const updateOverlayButtons = () => {
+  const buttons = elements.canvasView?.ribbonButtons ?? [];
+  buttons.forEach((button) => {
+    const overlay = button.dataset.overlay;
+    const isActive = overlay === state.canvasView.overlay;
+    button.classList.toggle("active", isActive);
+    button.setAttribute("aria-pressed", isActive ? "true" : "false");
+  });
+};
+
+const updateOverlayPanels = () => {
+  const panels = elements.canvasView?.ribbonPanels ?? [];
+  panels.forEach((panel) => {
+    const overlay = panel.dataset.overlayPanel;
+    const isActive = overlay === state.canvasView.overlay;
+    panel.classList.toggle("active", isActive);
+    panel.setAttribute("aria-hidden", isActive ? "false" : "true");
+  });
+};
+
+const updateViewOverlayStats = () => {
+  const stats = elements.canvasView?.overlayStats;
+  if (!stats) return;
+  if (stats.rooms) {
+    stats.rooms.textContent = state.rooms.length.toString();
+  }
+  if (stats.parcels) {
+    stats.parcels.textContent = getOwnedProperties().length.toString();
+  }
+  if (stats.plots) {
+    let openPlots = 0;
+    for (let y = 0; y < GRID_HEIGHT; y++) {
+      for (let x = 0; x < GRID_WIDTH; x++) {
+        if (isTileUnlocked(x, y) && !state.grid[y][x]) {
+          openPlots += 1;
+        }
+      }
+    }
+    stats.plots.textContent = openPlots.toString();
+  }
+  if (stats.queue) {
+    stats.queue.textContent = state.queue.length.toString();
+  }
+  if (stats.severity) {
+    const avgSeverity = state.queue.length
+      ? state.queue.reduce((sum, patient) => sum + (patient.ailment?.severity ?? 0), 0) /
+        state.queue.length
+      : 0;
+    stats.severity.textContent = avgSeverity.toFixed(1);
+  }
+  if (stats.emergencyShare) {
+    const emergencyCount = state.queue.filter((patient) => patient.isEmergency).length;
+    const share = state.queue.length ? Math.round((emergencyCount / state.queue.length) * 100) : 0;
+    stats.emergencyShare.textContent = `${share}%`;
+  }
+  if (stats.staff) {
+    stats.staff.textContent = state.staff.length.toString();
+  }
+  if (stats.roles) {
+    const roles = new Set(state.staff.map((member) => member.role));
+    stats.roles.textContent = roles.size.toString();
+  }
+  if (stats.morale) {
+    const moraleAverage = state.staff.length
+      ? Math.round(
+          state.staff.reduce((sum, member) => sum + (member.morale ?? 50), 0) / state.staff.length
+        )
+      : 0;
+    stats.morale.textContent = `${moraleAverage}%`;
+  }
+  if (stats.environment) {
+    stats.environment.textContent = Math.round(state.stats.environmentScore ?? 0).toString();
+  }
+  if (stats.welfare) {
+    stats.welfare.textContent = Math.round(state.stats.welfareScore ?? 0).toString();
+  }
+  if (stats.decor) {
+    const decorCount = state.rooms.reduce((sum, room) => sum + (room.decorations?.length ?? 0), 0);
+    stats.decor.textContent = decorCount.toString();
+  }
+};
+
+const updateReportStats = () => {
+  const report = elements.reports;
+  if (!report?.fields) return;
+  const {
+    cash,
+    revenue,
+    expenses,
+    net,
+    margin,
+    loans,
+    receivables,
+    queue,
+    emergency,
+    severity,
+    patience,
+    treated,
+    arrivals,
+    rooms,
+    parcels,
+    staff,
+    morale,
+    efficiency,
+    environment,
+  } = report.fields;
+
+  const revenueToday = state.stats.revenueToday;
+  const expensesToday = state.stats.expensesToday;
+  const netIncome = revenueToday - expensesToday;
+  const totalLoans = Math.round(state.loans.reduce((sum, loan) => sum + loan.remainingBalance, 0));
+  const totalReceivables = Math.round(
+    state.installmentPlans.reduce((sum, plan) => sum + plan.remaining, 0)
+  );
+
+  if (cash) {
+    cash.textContent = `¤${formatCurrency(state.stats.cash)}`;
+  }
+  if (revenue) {
+    revenue.textContent = `¤${formatCurrency(revenueToday)}`;
+  }
+  if (expenses) {
+    expenses.textContent = `¤${formatCurrency(expensesToday)}`;
+  }
+  if (net) {
+    net.textContent = `¤${formatCurrency(netIncome)}`;
+  }
+  if (margin) {
+    margin.textContent = revenueToday > 0 ? `${Math.round((netIncome / revenueToday) * 100)}%` : "—";
+  }
+  if (loans) {
+    loans.textContent = `¤${formatCurrency(totalLoans)}`;
+  }
+  if (receivables) {
+    receivables.textContent = `¤${formatCurrency(totalReceivables)}`;
+  }
+
+  const queueLength = state.queue.length;
+  const emergencyCount = state.queue.filter((patient) => patient.isEmergency).length;
+  const averageSeverity = queueLength
+    ? state.queue.reduce((sum, patient) => sum + (patient.ailment?.severity ?? 0), 0) /
+      queueLength
+    : 0;
+  const averagePatience = queueLength
+    ? state.queue.reduce((sum, patient) => sum + Math.max(0, patient.patience ?? 0), 0) /
+      queueLength
+    : 0;
+
+  if (queue) {
+    queue.textContent = queueLength.toString();
+  }
+  if (emergency) {
+    emergency.textContent = queueLength ? `${Math.round((emergencyCount / queueLength) * 100)}%` : "0%";
+  }
+  if (severity) {
+    severity.textContent = averageSeverity.toFixed(1);
+  }
+  if (patience) {
+    patience.textContent = `${Math.round(averagePatience)}%`;
+  }
+  if (treated) {
+    treated.textContent = state.stats.patientsTreated.toString();
+  }
+  if (arrivals) {
+    arrivals.textContent = state.stats.arrivalsToday.toString();
+  }
+
+  if (rooms) {
+    rooms.textContent = state.rooms.length.toString();
+  }
+  if (parcels) {
+    parcels.textContent = getOwnedProperties().length.toString();
+  }
+  if (staff) {
+    staff.textContent = state.staff.length.toString();
+  }
+  const moraleAverage = state.staff.length
+    ? Math.round(state.staff.reduce((sum, member) => sum + (member.morale ?? 50), 0) / state.staff.length)
+    : 0;
+  if (morale) {
+    morale.textContent = `${moraleAverage}%`;
+  }
+  if (efficiency) {
+    efficiency.textContent = `${Math.round(state.stats.efficiency)}%`;
+  }
+  if (environment) {
+    environment.textContent = Math.round(state.stats.environmentScore ?? 0).toString();
+  }
+};
+
+const updateEmergencyServicesPanel = () => {
+  const emergency = elements.emergencyServices ?? {};
+  if (!emergency.status) return;
+  syncEmergencyServices();
+  const service = state.emergencyServices;
+  const { status, department, bays, crew, fleet, readiness, summary, dispatch, autoToggle, planDept, planBay } =
+    emergency;
+  const queueHasEmergency = state.queue.some((patient) => patient.isEmergency);
+  const inFlight = service.pendingResponses.length;
+
+  status.classList.remove("ready", "cooldown", "offline", "standby");
+  if (!service.departmentReady) {
+    status.textContent = "Offline";
+    status.classList.add("offline");
+  } else if (!service.crewReady) {
+    status.textContent = "Crew Needed";
+    status.classList.add("standby");
+  } else if (!service.activeFleet) {
+    status.textContent = "No Fleet";
+    status.classList.add("standby");
+  } else if (service.cooldown > 0 || inFlight) {
+    status.textContent = inFlight ? "En Route" : "Resupplying";
+    status.classList.add("cooldown");
+  } else {
+    status.textContent = "Ready";
+    status.classList.add("ready");
+  }
+
+  if (department) {
+    department.textContent = service.departmentReady ? "Operational" : "Not built";
+  }
+  if (bays) {
+    bays.textContent = service.bayCount.toString();
+  }
+  if (crew) {
+    crew.textContent = service.paramedicCount ? `${service.paramedicCount} on duty` : "No crew";
+  }
+  if (fleet) {
+    fleet.textContent = service.activeFleet
+      ? `${service.activeFleet} unit${service.activeFleet > 1 ? "s" : ""}`
+      : "0 units";
+  }
+
+  if (readiness) {
+    if (!service.departmentReady) {
+      readiness.textContent = "Construct the Emergency Department to unlock dispatch.";
+    } else if (!service.crewReady) {
+      readiness.textContent = "Hire paramedics so ambulances can deploy.";
+    } else if (!service.bayCount) {
+      readiness.textContent = "Add an Ambulance Bay to improve response time.";
+    } else if (service.cooldown > 0) {
+      readiness.textContent = `Crews resupplying — ready in ${service.cooldown} tick${service.cooldown === 1 ? "" : "s"}.`;
+    } else if (inFlight) {
+      readiness.textContent = `Ambulance en route (${inFlight}).`;
+    } else if (queueHasEmergency) {
+      readiness.textContent = "Emergency patient waiting for treatment.";
+    } else {
+      readiness.textContent = "All crews on standby.";
+    }
+  }
+
+  if (summary) {
+    if (!service.departmentReady) {
+      summary.textContent = "Build the Emergency Department to unlock trauma care and ambulance coordination.";
+    } else if (!service.crewReady) {
+      summary.textContent = "Recruit paramedics to crew the fleet and maintain rapid response times.";
+    } else if (!service.bayCount) {
+      summary.textContent = "Construct an Ambulance Bay to stage vehicles and speed dispatch turnaround.";
+    } else if (service.cooldown > 0) {
+      summary.textContent = "Ambulance crews are refitting; dispatch will reopen shortly.";
+    } else if (inFlight) {
+      summary.textContent = "Monitor the queue for the incoming ambulance delivery.";
+    } else if (queueHasEmergency) {
+      summary.textContent = "Treat the current emergency patient to free up ambulance support.";
+    } else {
+      summary.textContent = "Ambulances are ready — dispatch manually or allow auto-response.";
+    }
+  }
+
+  if (dispatch) {
+    dispatch.disabled =
+      !service.departmentReady ||
+      !service.crewReady ||
+      !service.activeFleet ||
+      service.cooldown > 0 ||
+      inFlight >= service.activeFleet ||
+      queueHasEmergency;
+  }
+  if (autoToggle) {
+    autoToggle.checked = service.autoDispatch && service.departmentReady && service.crewReady;
+    autoToggle.disabled = !service.departmentReady || !service.crewReady;
+  }
+  if (planDept) {
+    planDept.disabled = false;
+    planDept.textContent = service.departmentReady ? "Review Emergency Department" : "Plan Emergency Department";
+  }
+  if (planBay) {
+    planBay.disabled = !service.departmentReady;
+    planBay.textContent = service.bayCount ? "Expand Ambulance Fleet" : "Add Ambulance Bay";
+  }
+};
+
+const dispatchAmbulance = ({ reason = "manual" } = {}) => {
+  const service = state.emergencyServices;
+  syncEmergencyServices();
+  if (!service.departmentReady) {
+    logEvent("Build an Emergency Department before dispatching ambulances.", "warning");
+    return;
+  }
+  if (!service.crewReady) {
+    logEvent("Hire a paramedic to crew the ambulance fleet.", "warning");
+    return;
+  }
+  if (!service.activeFleet) {
+    logEvent("Add an Ambulance Bay to stage vehicles before dispatching.", "warning");
+    return;
+  }
+  if (state.queue.some((patient) => patient.isEmergency)) {
+    logEvent("An emergency patient is already waiting — stabilise them before sending another crew.", "warning");
+    return;
+  }
+  if (service.pendingResponses.length >= service.activeFleet) {
+    logEvent("All ambulance crews are already en route.", "warning");
+    return;
+  }
+  if (service.cooldown > 0) {
+    logEvent("Crews are resupplying — they'll be ready shortly.", "warning");
+    return;
+  }
+
+  const bayBonus = Math.min(6, service.bayCount * 2);
+  const crewBonus = Math.min(4, service.paramedicCount * 0.75);
+  let responseTicks = Math.max(3, Math.round(12 - bayBonus - crewBonus));
+  if (!service.bayCount) {
+    responseTicks += 2;
+  }
+
+  service.pendingResponses.push({ ticks: responseTicks, reason });
+  service.cooldown = Math.max(4, responseTicks + (service.bayCount ? 2 : 5));
+  service.dispatchesToday += 1;
+
+  const tone = reason === "manual" ? "positive" : "neutral";
+  logEvent(
+    `${reason === "manual" ? "Priority" : "Automatic"} ambulance dispatched. ETA ${responseTicks} tick${
+      responseTicks === 1 ? "" : "s"
+    }.`,
+    tone
+  );
+  updateEmergencyServicesPanel();
+};
+
+const setupEmergencyServicesPanel = () => {
+  const emergency = elements.emergencyServices ?? {};
+  emergency.planDept?.addEventListener("click", () => planBuildBlueprint("emergency"));
+  emergency.planBay?.addEventListener("click", () => planBuildBlueprint("ambulancebay"));
+  emergency.dispatch?.addEventListener("click", () => dispatchAmbulance({ reason: "manual" }));
+  emergency.autoToggle?.addEventListener("change", (event) => {
+    state.emergencyServices.autoDispatch = event.target.checked;
+    logEvent(
+      `Ambulance auto-dispatch ${event.target.checked ? "enabled" : "paused"}.`,
+      event.target.checked ? "positive" : "neutral"
+    );
+    updateEmergencyServicesPanel();
+  });
+};
+
+const processAmbulanceOperations = () => {
+  const service = state.emergencyServices;
+  if (!service) return;
+  syncEmergencyServices();
+  if (!service.departmentReady) {
+    updateEmergencyServicesPanel();
+    return;
+  }
+
+  if (service.cooldown > 0) {
+    service.cooldown = Math.max(0, service.cooldown - 1);
+  }
+
+  if (service.pendingResponses.length) {
+    service.pendingResponses.forEach((response) => {
+      response.ticks -= 1;
+    });
+    const arrivals = service.pendingResponses.filter((response) => response.ticks <= 0);
+    if (arrivals.length) {
+      service.pendingResponses = service.pendingResponses.filter((response) => response.ticks > 0);
+      arrivals.forEach(() => {
+        const patient = spawnPatient({ emergency: true, ailment: randomFrom(emergencyCases), announce: false });
+        patient.patience = clamp(patient.patience + 30 + service.bayCount * 6, 0, 200);
+        patient.arrivalMode = "ambulance";
+        logEvent(
+          `Ambulance delivers ${patient.name} (${patient.ailment.name}). Triage immediately!`,
+          "warning"
+        );
+      });
+    }
+  }
+
+  if (
+    service.autoDispatch &&
+    service.departmentReady &&
+    service.crewReady &&
+    service.activeFleet &&
+    !state.queue.some((patient) => patient.isEmergency) &&
+    service.pendingResponses.length < service.activeFleet &&
+    service.cooldown <= 0
+  ) {
+    const autoInterval = Math.max(12, 28 - service.activeFleet * 4);
+    if (state.stats.tick % autoInterval === 0) {
+      dispatchAmbulance({ reason: "auto" });
+    }
+  }
+
+  updateEmergencyServicesPanel();
+};
+
+const setActiveReport = (reportId) => {
+  const { tabs, panels } = elements.reports ?? {};
+  if (!tabs || !panels) return;
+  tabs.forEach((tab) => {
+    const isActive = tab.dataset.report === reportId;
+    tab.classList.toggle("active", isActive);
+    tab.setAttribute("aria-selected", isActive ? "true" : "false");
+  });
+  panels.forEach((panel) => {
+    const isActive = panel.dataset.reportPanel === reportId;
+    panel.classList.toggle("active", isActive);
+    panel.setAttribute("aria-hidden", isActive ? "false" : "true");
+  });
+};
+
+const setupReportMenu = () => {
+  const { tabs } = elements.reports ?? {};
+  if (!tabs?.length) return;
+  tabs.forEach((tab) => {
+    tab.addEventListener("click", () => setActiveReport(tab.dataset.report));
+  });
+  const initialTab = tabs.find((tab) => tab.classList.contains("active")) ?? tabs[0];
+  if (initialTab) {
+    setActiveReport(initialTab.dataset.report);
+  }
+};
+
+const setActivePolicyTab = (policyId) => {
+  const { tabs, panels } = elements.policyMenu ?? {};
+  if (!tabs?.length || !panels?.length) {
+    return;
+  }
+  tabs.forEach((tab) => {
+    const isActive = tab.dataset.policy === policyId;
+    tab.classList.toggle("active", isActive);
+    tab.setAttribute("aria-selected", isActive ? "true" : "false");
+  });
+  panels.forEach((panel) => {
+    const isActive = panel.dataset.policyPanel === policyId;
+    panel.classList.toggle("active", isActive);
+    panel.setAttribute("aria-hidden", isActive ? "false" : "true");
+  });
+};
+
+const updatePolicySummary = () => {
+  const { summaryList } = elements.policyMenu ?? {};
+  if (!summaryList) {
+    return;
+  }
+  summaryList.innerHTML = "";
+  const activePolicies = Object.values(elements.policies)
+    .filter((input) => input?.checked)
+    .map((input) => ({
+      name: input.dataset.policyName ?? input.id,
+      summary: input.dataset.policySummary ?? "",
+    }));
+
+  if (!activePolicies.length) {
+    const empty = document.createElement("li");
+    empty.className = "policy-summary-empty";
+    empty.textContent = "No directives active.";
+    summaryList.appendChild(empty);
+    return;
+  }
+
+  activePolicies.forEach((policy) => {
+    const item = document.createElement("li");
+    const title = document.createElement("strong");
+    title.textContent = policy.name;
+    item.appendChild(title);
+    if (policy.summary) {
+      const desc = document.createElement("span");
+      desc.textContent = policy.summary;
+      item.appendChild(desc);
+    }
+    summaryList.appendChild(item);
+  });
+};
+
+const handlePolicyToggle = (event) => {
+  const input = event.target;
+  if (!(input instanceof HTMLInputElement)) {
+    return;
+  }
+  const message = input.checked ? input.dataset.policyOn : input.dataset.policyOff;
+  if (message) {
+    logEvent(message, input.checked ? "positive" : "neutral");
+  }
+  updatePolicySummary();
+};
+
+const setupPolicyMenu = () => {
+  const { tabs } = elements.policyMenu ?? {};
+  if (tabs?.length) {
+    tabs.forEach((tab) => {
+      tab.addEventListener("click", () => setActivePolicyTab(tab.dataset.policy));
+    });
+    const initialTab =
+      tabs.find((tab) => tab.classList.contains("active")) ??
+      (tabs.length ? tabs[0] : null);
+    if (initialTab) {
+      setActivePolicyTab(initialTab.dataset.policy);
+    }
+  }
+  Object.values(elements.policies)
+    .filter(Boolean)
+    .forEach((input) => input.addEventListener("change", handlePolicyToggle));
+  updatePolicySummary();
+};
+
+const setCanvasOverlay = (overlay) => {
+  if (!overlay || overlay === state.canvasView.overlay) {
+    return;
+  }
+  state.canvasView.overlay = overlay;
+  updateOverlayButtons();
+  updateOverlayPanels();
+  renderHospitalCanvas();
+};
+
+const setCanvasProjection = (projection) => {
+  if (!projection || projection === state.canvasView.projection) {
+    return;
+  }
+  state.canvasView.projection = projection;
+  updateProjectionButtons();
+  updateWallsButton();
+  updateRotateButton();
+  renderHospitalCanvas();
+};
+
+const toggleCanvasWalls = () => {
+  if (state.canvasView.projection !== "isometric") return;
+  state.canvasView.showWalls = !state.canvasView.showWalls;
+  updateWallsButton();
+  renderHospitalCanvas();
+};
+
+const rotateCanvasView = () => {
+  if (state.canvasView.projection !== "isometric") return;
+  state.canvasView.rotation = (state.canvasView.rotation + 1) % 4;
+  updateRotateButton();
+  renderHospitalCanvas();
+};
+
+const applyFocusSelection = (value) => {
+  if (!value || value === "hospital") {
+    state.canvasView.focus = "hospital";
+    state.canvasView.selectedRoomId = null;
+  } else {
+    state.canvasView.focus = "room";
+    state.canvasView.selectedRoomId = value;
+  }
+  updateCanvasFocusOptions();
+  renderHospitalCanvas();
+};
+
+const setupCanvasViewControls = () => {
+  updateProjectionButtons();
+  updateWallsButton();
+  updateRotateButton();
+  updateCanvasFocusOptions();
+  updateOverlayButtons();
+  updateOverlayPanels();
+  updateViewOverlayStats();
+  const { projectionButtons, toggleWalls, focusSelect, rotateView, ribbonButtons } = elements.canvasView ?? {};
+  projectionButtons?.forEach((button) => {
+    button.addEventListener("click", () => setCanvasProjection(button.dataset.projection));
+  });
+  if (toggleWalls) {
+    toggleWalls.addEventListener("click", toggleCanvasWalls);
+  }
+  focusSelect?.addEventListener("change", (event) => applyFocusSelection(event.target.value));
+  rotateView?.addEventListener("click", rotateCanvasView);
+  ribbonButtons?.forEach((button) => {
+    button.addEventListener("click", () => setCanvasOverlay(button.dataset.overlay));
+  });
+};
+
 const highlightBuildSelection = (roomId) => {
   if (!elements.buildOptions) return;
   elements.buildOptions.querySelectorAll("button").forEach((button) => {
     button.classList.toggle("selected", button.dataset.room === roomId);
   });
+};
+
+const planBuildBlueprint = (roomId) => {
+  const blueprint = getBlueprint(roomId);
+  if (!blueprint) {
+    logEvent("That blueprint isn't available yet.", "warning");
+    return;
+  }
+  const buildTab = document.querySelector('.tab-button[data-tab="build"]');
+  if (buildTab && !buildTab.classList.contains("active")) {
+    buildTab.click();
+  }
+  selectedRoom = blueprint;
+  setDesignerBlueprint(blueprint, { resetSelections: true });
+  highlightBuildSelection(roomId);
+  updateBuildGuidance();
+  updateDesignerSummary();
+  logEvent(`${blueprint.name} blueprint readied. Select a top-left tile to place it.`, "neutral");
 };
 
 const updateDesignerSummary = () => {
@@ -2472,10 +3604,13 @@ const loadRoomIntoDesigner = (room) => {
   }
   designerState.decorations = new Set(room.decorations ?? []);
   selectedRoom = blueprint;
+  state.canvasView.focus = "room";
+  state.canvasView.selectedRoomId = room.id;
   setDesignerBlueprint(blueprint, { resetSelections: false, editing: true });
   highlightBuildSelection(blueprint.id);
   updateBuildGuidance();
   renderRoomManagement();
+  renderHospitalCanvas();
 };
 
 const canPlaceFootprint = (x, y, width, height, ignoreRoom = null) => {
@@ -2542,6 +3677,12 @@ const recalculateAmbience = () => {
   const plantBonus = (state.stats.plantCare - 70) / 10 + getTotalPlants() * 0.1;
   state.stats.environmentScore = clamp(55 + totals.environment * 6 + plantBonus - groundsPenalty, 0, 100);
   state.stats.welfareScore = clamp(55 + totals.welfare * 6 + snackComfort - groundsPenalty * 0.5, 0, 100);
+  if (isPolicyActive("comfortCare")) {
+    state.stats.welfareScore = clamp(state.stats.welfareScore + 5, 0, 100);
+  }
+  if (isPolicyActive("hygiene")) {
+    state.stats.environmentScore = clamp(state.stats.environmentScore + 3, 0, 100);
+  }
 };
 
 const renderRoomManagement = () => {
@@ -2551,6 +3692,7 @@ const renderRoomManagement = () => {
     const empty = document.createElement("li");
     empty.textContent = "No rooms constructed yet.";
     elements.builtRooms.appendChild(empty);
+    updateCanvasFocusOptions();
     return;
   }
   state.rooms.forEach((room) => {
@@ -2642,6 +3784,7 @@ const renderRoomManagement = () => {
 
     elements.builtRooms.appendChild(li);
   });
+  updateCanvasFocusOptions();
 };
 
 const applyDesignToRoom = () => {
@@ -2899,6 +4042,7 @@ const setupCanvas = () => {
   canvas.style.width = "100%";
   canvas.style.height = "auto";
   canvas.style.maxWidth = `${width}px`;
+  canvas.dataset.projection = state.canvasView.projection;
   hospitalCtx = canvas.getContext("2d");
   hospitalCtx.setTransform(1, 0, 0, 1, 0, 0);
   hospitalCtx.scale(scale, scale);
@@ -3059,7 +4203,7 @@ const drawRoomMachines = (ctx, room) => {
     ctx.restore();
   });
 
-  if (room.severityCapacity) {
+  if (room.severityCapacity && state.canvasView.overlay === "layout") {
     ctx.save();
     drawRoundedRect(ctx, originX + 8, originY + 8, 40, 18, 6);
     ctx.fillStyle = "rgba(15, 23, 42, 0.78)";
@@ -3123,13 +4267,9 @@ const drawRoomLabel = (ctx, room) => {
   ctx.restore();
 };
 
-const renderHospitalCanvas = () => {
-  if (!hospitalCtx) return;
-  const width = GRID_WIDTH * CANVAS_CELL;
-  const height = GRID_HEIGHT * CANVAS_CELL;
-  hospitalCtx.clearRect(0, 0, width, height);
+const renderBlueprintView = (ctx, width, height) => {
   const blueprintLayer = getBlueprintBuffer(width, height);
-  hospitalCtx.drawImage(blueprintLayer, 0, 0);
+  ctx.drawImage(blueprintLayer, 0, 0);
 
   const emptyTile = getEmptyTileSprite();
   const lockedTile = getLockedTileSprite();
@@ -3138,7 +4278,7 @@ const renderHospitalCanvas = () => {
       const px = x * CANVAS_CELL;
       const py = y * CANVAS_CELL;
       if (!isTileUnlocked(x, y)) {
-        hospitalCtx.drawImage(lockedTile, px, py);
+        ctx.drawImage(lockedTile, px, py);
         continue;
       }
       const room = state.grid[y][x];
@@ -3147,9 +4287,9 @@ const renderHospitalCanvas = () => {
         const visual = roomVisuals[visualKey] ?? roomVisuals.default;
         const theme = getInteriorTheme(room.interiorId);
         const sprite = getRoomTileSprite(theme, visualKey, visual);
-        hospitalCtx.drawImage(sprite, px, py);
+        ctx.drawImage(sprite, px, py);
       } else {
-        hospitalCtx.drawImage(emptyTile, px, py);
+        ctx.drawImage(emptyTile, px, py);
       }
     }
   }
@@ -3159,54 +4299,342 @@ const renderHospitalCanvas = () => {
     const py = parcel.y * CANVAS_CELL;
     const w = parcel.width * CANVAS_CELL;
     const h = parcel.height * CANVAS_CELL;
-    hospitalCtx.save();
+    ctx.save();
     if (parcel.owned) {
-      hospitalCtx.strokeStyle = "rgba(56, 189, 248, 0.35)";
-      hospitalCtx.lineWidth = 3;
-      hospitalCtx.setLineDash([10, 6]);
-      hospitalCtx.strokeRect(px + 2, py + 2, w - 4, h - 4);
+      ctx.strokeStyle = "rgba(56, 189, 248, 0.35)";
+      ctx.lineWidth = 3;
+      ctx.setLineDash([10, 6]);
+      ctx.strokeRect(px + 2, py + 2, w - 4, h - 4);
     } else {
-      const overlay = hospitalCtx.createLinearGradient(px, py, px + w, py + h);
+      const overlay = ctx.createLinearGradient(px, py, px + w, py + h);
       overlay.addColorStop(0, "rgba(30, 64, 175, 0.45)");
       overlay.addColorStop(1, "rgba(15, 23, 42, 0.7)");
-      hospitalCtx.fillStyle = overlay;
-      hospitalCtx.fillRect(px + 2, py + 2, w - 4, h - 4);
-      hospitalCtx.strokeStyle = "rgba(148, 197, 255, 0.55)";
-      hospitalCtx.lineWidth = 3;
-      hospitalCtx.setLineDash([12, 6]);
-      hospitalCtx.strokeRect(px + 2, py + 2, w - 4, h - 4);
-      hospitalCtx.fillStyle = "rgba(191, 219, 254, 0.85)";
-      hospitalCtx.font = "14px 'Segoe UI', sans-serif";
-      hospitalCtx.textAlign = "center";
-      hospitalCtx.fillText("For Sale", px + w / 2, py + h / 2);
+      ctx.fillStyle = overlay;
+      ctx.fillRect(px + 2, py + 2, w - 4, h - 4);
+      ctx.strokeStyle = "rgba(148, 197, 255, 0.55)";
+      ctx.lineWidth = 3;
+      ctx.setLineDash([12, 6]);
+      ctx.strokeRect(px + 2, py + 2, w - 4, h - 4);
+      ctx.fillStyle = "rgba(191, 219, 254, 0.85)";
+      ctx.font = "14px 'Segoe UI', sans-serif";
+      ctx.textAlign = "center";
+      ctx.fillText("For Sale", px + w / 2, py + h / 2);
     }
-    hospitalCtx.restore();
+    ctx.restore();
   });
 
   state.rooms.forEach((room) => {
-    drawRoomAura(hospitalCtx, room);
+    ctx.save();
+    if (shouldDimRoom(room)) {
+      ctx.globalAlpha = 0.32;
+    }
+    drawRoomAura(ctx, room);
+    ctx.restore();
   });
 
   state.rooms.forEach((room) => {
+    const dimmed = shouldDimRoom(room);
+    const overlay = getRoomOverlayDescriptor(room);
+    drawBlueprintOverlay(ctx, room, overlay, dimmed);
+
     const theme = getInteriorTheme(room.interiorId);
-    hospitalCtx.save();
-    hospitalCtx.strokeStyle = withAlpha(theme.palette?.accent ?? "#94a3b8", 0.9);
-    hospitalCtx.lineWidth = 2.5;
-    hospitalCtx.shadowColor = withAlpha(theme.palette?.accent ?? "#94a3b8", 0.35);
-    hospitalCtx.shadowBlur = 8;
-    hospitalCtx.strokeRect(
+    ctx.save();
+    if (dimmed) {
+      ctx.globalAlpha = 0.5;
+    }
+    ctx.strokeStyle = withAlpha(theme.palette?.accent ?? "#94a3b8", 0.9);
+    ctx.lineWidth = 2.5;
+    ctx.shadowColor = withAlpha(theme.palette?.accent ?? "#94a3b8", 0.35);
+    ctx.shadowBlur = 8;
+    ctx.strokeRect(
       room.x * CANVAS_CELL + 3,
       room.y * CANVAS_CELL + 3,
       room.width * CANVAS_CELL - 6,
       room.height * CANVAS_CELL - 6
     );
-    hospitalCtx.restore();
-    drawRoomMachines(hospitalCtx, room);
-    drawRoomDecor(hospitalCtx, room);
-    drawRoomLabel(hospitalCtx, room);
-    drawRoomVitals(hospitalCtx, room);
+    ctx.restore();
+
+    ctx.save();
+    if (dimmed) {
+      ctx.globalAlpha = 0.45;
+    }
+    drawRoomMachines(ctx, room);
+    drawRoomDecor(ctx, room);
+    drawRoomLabel(ctx, room);
+    drawRoomVitals(ctx, room);
+    ctx.restore();
+    drawBlueprintOverlayBadge(ctx, room, overlay);
   });
 
+  const focusRoom = getFocusedRoom();
+  if (focusRoom) {
+    const theme = getInteriorTheme(focusRoom.interiorId);
+    const accent = theme.palette?.accent ?? "#38bdf8";
+    ctx.save();
+    ctx.strokeStyle = withAlpha(accent, 0.95);
+    ctx.lineWidth = 4;
+    ctx.setLineDash([12, 8]);
+    ctx.shadowColor = withAlpha(accent, 0.55);
+    ctx.shadowBlur = 14;
+    ctx.strokeRect(
+      focusRoom.x * CANVAS_CELL + 4,
+      focusRoom.y * CANVAS_CELL + 4,
+      focusRoom.width * CANVAS_CELL - 8,
+      focusRoom.height * CANVAS_CELL - 8
+    );
+    ctx.restore();
+  }
+};
+
+const renderIsometricView = (ctx, width, height) => {
+  const rotation = state.canvasView.rotation % 4;
+  const focusRoom = getFocusedRoom();
+  const showWalls = state.canvasView.showWalls;
+
+  const backdrop = ctx.createLinearGradient(0, 0, width, height);
+  backdrop.addColorStop(0, "rgba(15, 23, 42, 0.92)");
+  backdrop.addColorStop(1, "rgba(8, 47, 73, 0.85)");
+  ctx.fillStyle = backdrop;
+  ctx.fillRect(0, 0, width, height);
+
+  const isoHeightSpan = (GRID_WIDTH + GRID_HEIGHT) * (ISO_TILE_HEIGHT / 2);
+  ctx.save();
+  ctx.translate(width / 2, 160);
+  ctx.translate(0, -isoHeightSpan / 2);
+
+  ctx.save();
+  ctx.fillStyle = "rgba(8, 47, 73, 0.45)";
+  ctx.beginPath();
+  ctx.ellipse(0, isoHeightSpan * 0.75, (GRID_WIDTH + GRID_HEIGHT) * (ISO_TILE_WIDTH / 4), ISO_TILE_HEIGHT * 1.2, 0, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.restore();
+
+  const tiles = [];
+  for (let y = 0; y < GRID_HEIGHT; y++) {
+    for (let x = 0; x < GRID_WIDTH; x++) {
+      tiles.push({
+        x,
+        y,
+        oriented: orientIsoPoint(x, y, rotation),
+        unlocked: isTileUnlocked(x, y),
+        room: state.grid[y][x],
+      });
+    }
+  }
+  tiles.sort((a, b) => {
+    const da = a.oriented.x + a.oriented.y;
+    const db = b.oriented.x + b.oriented.y;
+    if (da === db) {
+      if (a.oriented.y === b.oriented.y) {
+        return a.oriented.x - b.oriented.x;
+      }
+      return a.oriented.y - b.oriented.y;
+    }
+    return da - db;
+  });
+
+  tiles.forEach((tile) => {
+    const corners = getIsoTileCorners(tile.x, tile.y, rotation);
+    ctx.save();
+    if (focusRoom) {
+      if (tile.room) {
+        ctx.globalAlpha = shouldDimRoom(tile.room) ? 0.45 : 1;
+      } else {
+        ctx.globalAlpha = 0.28;
+      }
+    }
+    ctx.beginPath();
+    ctx.moveTo(corners.top.x, corners.top.y);
+    ctx.lineTo(corners.right.x, corners.right.y);
+    ctx.lineTo(corners.bottom.x, corners.bottom.y);
+    ctx.lineTo(corners.left.x, corners.left.y);
+    ctx.closePath();
+    if (!tile.unlocked) {
+      const gradient = ctx.createLinearGradient(corners.left.x, corners.left.y, corners.right.x, corners.right.y);
+      gradient.addColorStop(0, "rgba(30, 41, 59, 0.95)");
+      gradient.addColorStop(1, "rgba(15, 23, 42, 0.95)");
+      ctx.fillStyle = gradient;
+      ctx.fill();
+      ctx.strokeStyle = "rgba(148, 163, 184, 0.35)";
+      ctx.stroke();
+    } else if (tile.room) {
+      const theme = getInteriorTheme(tile.room.interiorId);
+      const base = theme.palette?.base ?? "#1f2937";
+      const mid = theme.palette?.mid ?? shiftColor(base, 0.12);
+      const accent = theme.palette?.accent ?? "#38bdf8";
+      const floorGradient = ctx.createLinearGradient(corners.left.x, corners.left.y, corners.right.x, corners.right.y);
+      floorGradient.addColorStop(0, withAlpha(shiftColor(base, 0.1), 0.95));
+      floorGradient.addColorStop(1, withAlpha(shiftColor(mid, -0.05), 0.92));
+      ctx.fillStyle = floorGradient;
+      ctx.fill();
+
+      const sheen = ctx.createLinearGradient(corners.top.x, corners.top.y, corners.bottom.x, corners.bottom.y);
+      sheen.addColorStop(0, withAlpha(accent, 0.32));
+      sheen.addColorStop(0.6, "rgba(255, 255, 255, 0.08)");
+      sheen.addColorStop(1, "rgba(15, 23, 42, 0)");
+      ctx.beginPath();
+      ctx.moveTo(corners.top.x, corners.top.y);
+      ctx.lineTo(corners.right.x, corners.right.y);
+      ctx.lineTo(corners.bottom.x, corners.bottom.y);
+      ctx.lineTo(corners.left.x, corners.left.y);
+      ctx.closePath();
+      ctx.fillStyle = sheen;
+      ctx.fill();
+    } else {
+      const campusGradient = ctx.createLinearGradient(corners.left.x, corners.left.y, corners.right.x, corners.right.y);
+      campusGradient.addColorStop(0, "rgba(46, 134, 222, 0.25)");
+      campusGradient.addColorStop(1, "rgba(14, 165, 233, 0.18)");
+      ctx.fillStyle = campusGradient;
+      ctx.fill();
+      ctx.strokeStyle = "rgba(59, 130, 246, 0.25)";
+      ctx.stroke();
+    }
+
+    if (tile.room && showWalls) {
+      const theme = getInteriorTheme(tile.room.interiorId);
+      const mid = theme.palette?.mid ?? theme.palette?.accent ?? "#38bdf8";
+      const edges = isoEdgeCornerMap[rotation];
+      const dirs = isoEdgeDirections[rotation];
+      const drawWall = (cornerPair, mix) => {
+        const [startName, endName] = cornerPair;
+        const start = corners[startName];
+        const end = corners[endName];
+        ctx.beginPath();
+        ctx.moveTo(start.x, start.y);
+        ctx.lineTo(end.x, end.y);
+        ctx.lineTo(end.x, end.y - ISO_TILE_DEPTH);
+        ctx.lineTo(start.x, start.y - ISO_TILE_DEPTH);
+        ctx.closePath();
+        const wallBase = shiftColor(mid, mix);
+        const wallGradient = ctx.createLinearGradient(start.x, start.y, start.x, start.y - ISO_TILE_DEPTH);
+        wallGradient.addColorStop(0, withAlpha(wallBase, 0.92));
+        wallGradient.addColorStop(1, withAlpha(shiftColor(wallBase, -0.22), 0.88));
+        ctx.fillStyle = wallGradient;
+        ctx.fill();
+        ctx.strokeStyle = withAlpha(shiftColor(wallBase, -0.3), 0.85);
+        ctx.lineWidth = 1;
+        ctx.stroke();
+      };
+
+      if (!isSameRoomTile(tile.x, tile.y, dirs.primary.dx, dirs.primary.dy, tile.room)) {
+        drawWall(edges.primary, -0.05);
+      }
+      if (!isSameRoomTile(tile.x, tile.y, dirs.secondary.dx, dirs.secondary.dy, tile.room)) {
+        drawWall(edges.secondary, 0.08);
+      }
+    }
+    ctx.restore();
+  });
+
+  state.rooms.forEach((room) => {
+    const overlay = getRoomOverlayDescriptor(room);
+    const dimmed = shouldDimRoom(room);
+    drawIsometricOverlay(ctx, room, overlay, rotation, {
+      dimmed,
+      focused: Boolean(focusRoom && focusRoom.id === room.id),
+    });
+  });
+
+  state.rooms.forEach((room) => {
+    const corners = getIsoFootprintCorners(room.x, room.y, room.width, room.height, rotation);
+    const theme = getInteriorTheme(room.interiorId);
+    ctx.save();
+    if (shouldDimRoom(room)) {
+      ctx.globalAlpha = 0.55;
+    }
+    ctx.beginPath();
+    ctx.moveTo(corners.top.x, corners.top.y);
+    ctx.lineTo(corners.right.x, corners.right.y);
+    ctx.lineTo(corners.bottom.x, corners.bottom.y);
+    ctx.lineTo(corners.left.x, corners.left.y);
+    ctx.closePath();
+    if (focusRoom && focusRoom.id === room.id) {
+      ctx.strokeStyle = withAlpha(theme.palette?.accent ?? "#38bdf8", 0.95);
+      ctx.lineWidth = 3.5;
+      ctx.shadowColor = withAlpha(theme.palette?.accent ?? "#38bdf8", 0.55);
+      ctx.shadowBlur = 16;
+    } else {
+      ctx.strokeStyle = withAlpha(theme.palette?.accent ?? "#94a3b8", 0.5);
+      ctx.lineWidth = 1.4;
+    }
+    ctx.stroke();
+    ctx.restore();
+  });
+
+  state.properties.forEach((parcel) => {
+    const corners = getIsoFootprintCorners(parcel.x, parcel.y, parcel.width, parcel.height, rotation);
+    ctx.save();
+    ctx.beginPath();
+    ctx.moveTo(corners.top.x, corners.top.y);
+    ctx.lineTo(corners.right.x, corners.right.y);
+    ctx.lineTo(corners.bottom.x, corners.bottom.y);
+    ctx.lineTo(corners.left.x, corners.left.y);
+    ctx.closePath();
+    if (parcel.owned) {
+      ctx.strokeStyle = "rgba(148, 197, 255, 0.35)";
+      ctx.setLineDash([8, 6]);
+      ctx.lineWidth = 1.4;
+      ctx.stroke();
+    } else {
+      ctx.fillStyle = "rgba(30, 64, 175, 0.35)";
+      ctx.fill();
+      ctx.strokeStyle = "rgba(191, 219, 254, 0.55)";
+      ctx.setLineDash([10, 6]);
+      ctx.lineWidth = 1.6;
+      ctx.stroke();
+      const centerX = (corners.top.x + corners.right.x + corners.bottom.x + corners.left.x) / 4;
+      const centerY = (corners.top.y + corners.right.y + corners.bottom.y + corners.left.y) / 4 - ISO_TILE_DEPTH * 0.6;
+      drawRoundedRect(ctx, centerX - 42, centerY - 14, 84, 26, 12);
+      ctx.fillStyle = "rgba(15, 23, 42, 0.82)";
+      ctx.fill();
+      ctx.strokeStyle = "rgba(191, 219, 254, 0.65)";
+      ctx.stroke();
+      ctx.fillStyle = "rgba(191, 219, 254, 0.95)";
+      ctx.font = "12px 'Segoe UI', sans-serif";
+      ctx.textAlign = "center";
+      ctx.fillText("For Sale", centerX, centerY + 5);
+    }
+    ctx.restore();
+  });
+
+  if (focusRoom) {
+    const blueprint = getBlueprint(focusRoom.type);
+    const corners = getIsoFootprintCorners(focusRoom.x, focusRoom.y, focusRoom.width, focusRoom.height, rotation);
+    const centerX = (corners.top.x + corners.right.x + corners.bottom.x + corners.left.x) / 4;
+    const centerY = (corners.top.y + corners.right.y + corners.bottom.y + corners.left.y) / 4 - ISO_TILE_DEPTH - 28;
+    ctx.save();
+    drawRoundedRect(ctx, centerX - 72, centerY - 20, 144, 36, 14);
+    ctx.fillStyle = "rgba(15, 23, 42, 0.85)";
+    ctx.fill();
+    const theme = getInteriorTheme(focusRoom.interiorId);
+    ctx.strokeStyle = withAlpha(theme.palette?.accent ?? "#38bdf8", 0.9);
+    ctx.stroke();
+    ctx.fillStyle = "rgba(248, 250, 252, 0.92)";
+    ctx.font = "13px 'Segoe UI', sans-serif";
+    ctx.textAlign = "center";
+    ctx.fillText(blueprint?.name ?? focusRoom.type, centerX, centerY + 4);
+    ctx.restore();
+  }
+
+  ctx.restore();
+};
+
+const renderHospitalCanvas = () => {
+  if (!hospitalCtx) return;
+  const width = GRID_WIDTH * CANVAS_CELL;
+  const height = GRID_HEIGHT * CANVAS_CELL;
+  hospitalCtx.setTransform(1, 0, 0, 1, 0, 0);
+  hospitalCtx.clearRect(0, 0, width, height);
+  if (elements.hospitalCanvas) {
+    elements.hospitalCanvas.dataset.projection = state.canvasView.projection;
+    elements.hospitalCanvas.dataset.overlay = state.canvasView.overlay;
+  }
+  if (state.canvasView.projection === "isometric") {
+    renderIsometricView(hospitalCtx, width, height);
+  } else {
+    renderBlueprintView(hospitalCtx, width, height);
+  }
+  updateViewOverlayStats();
   drawPatientQueue(hospitalCtx);
 };
 
@@ -3225,7 +4653,7 @@ const updateStats = () => {
     welfareScore,
   } = state.stats;
   elements.statDay.textContent = day;
-  elements.statCash.textContent = formatCurrency(cash);
+  elements.statCash.textContent = `¤${formatCurrency(cash)}`;
   elements.statReputation.textContent = reputation;
   elements.statTreated.textContent = patientsTreated;
   elements.meters.cleanliness.value = cleanliness;
@@ -3244,6 +4672,9 @@ const updateStats = () => {
     elements.statWelfare.textContent = Math.round(welfareScore);
   }
   updatePropertyPurchaseButtons();
+  updateViewOverlayStats();
+  updateReportStats();
+  updateEmergencyServicesPanel();
 };
 
 const updateQueue = () => {
@@ -3278,6 +4709,14 @@ const updateQueue = () => {
       meta.appendChild(emergencyBadge);
     }
 
+    if (patient.arrivalMode === "ambulance") {
+      const ambulanceBadge = document.createElement("span");
+      ambulanceBadge.className = "queue-badge";
+      ambulanceBadge.textContent = "Ambulance";
+      ambulanceBadge.style.color = "#38bdf8";
+      meta.appendChild(ambulanceBadge);
+    }
+
     const patience = document.createElement("span");
     patience.textContent = `Patience ${Math.max(0, Math.round(patient.patience))}`;
     meta.appendChild(patience);
@@ -3299,6 +4738,7 @@ const updateQueue = () => {
     elements.patientQueue.appendChild(li);
   });
   renderHospitalCanvas();
+  updateReportStats();
 };
 
 const updateObjectives = () => {
@@ -3437,6 +4877,25 @@ const countStaffByRole = (role) => state.staff.filter((member) => member.role ==
 
 const hasRoomBuilt = (type) => state.rooms.some((room) => room.type === type);
 
+const syncEmergencyServices = () => {
+  const service = state.emergencyServices;
+  if (!service) return;
+  const departmentReady = hasRoomBuilt("emergency");
+  const bayCount = state.rooms.filter((room) => room.type === "ambulancebay").length;
+  const paramedicCount = countStaffByRole("paramedic");
+  service.departmentReady = departmentReady;
+  service.bayCount = bayCount;
+  service.paramedicCount = paramedicCount;
+  service.crewReady = paramedicCount > 0;
+  const baseFleet = departmentReady ? 1 : 0;
+  service.capacity = departmentReady ? baseFleet + bayCount : 0;
+  service.activeFleet = service.crewReady ? service.capacity : 0;
+  if (!departmentReady) {
+    service.pendingResponses = [];
+    service.cooldown = 0;
+  }
+};
+
 const STAFF_ROLE_LABELS = {
   doctor: "Doctor",
   nurse: "Nurse",
@@ -3452,6 +4911,7 @@ const STAFF_ROLE_LABELS = {
   therapist: "Therapist",
   entertainer: "Entertainer",
   security: "Security",
+  paramedic: "Paramedic",
   dentist: "Dentist",
   chef: "Chef",
 };
@@ -3854,6 +5314,8 @@ const handleBuildClick = (x, y) => {
   };
   occupyRoomFootprint(room);
   state.rooms.push(room);
+  state.canvasView.focus = "room";
+  state.canvasView.selectedRoomId = room.id;
   state.stats.cash -= preview.totalCost;
   state.stats.expensesToday += preview.totalCost;
   state.stats.reputation = clamp(
@@ -3873,6 +5335,14 @@ const handleBuildClick = (x, y) => {
     `${blueprint.name} constructed at ${coordLabel} for ¤${formatCurrency(preview.totalCost)} with ${machines.length} machines and ${decorations.length} decor upgrades.`,
     "positive"
   );
+  if (blueprint.id === "emergency") {
+    logEvent("Emergency Department is online. Ambulance coordination unlocked.", "positive");
+  }
+  if (blueprint.id === "ambulancebay") {
+    logEvent("Ambulance Bay ready — additional crews can now mobilise.", "positive");
+  }
+  syncEmergencyServices();
+  updateEmergencyServicesPanel();
   if (elements.blueprintFootnote) {
     elements.blueprintFootnote.textContent = `${blueprint.name} placed at plot ${coordLabel}. Click another top-left tile or press Esc to cancel.`;
   }
@@ -3974,8 +5444,11 @@ const createPatient = ({ ailment = randomFrom(ailments), emergency = false } = {
   let patience = emergency ? 140 : 100;
   patience += state.ambience.environment * 4;
   patience += state.ambience.welfare * 2;
-  if (elements.policies.fastTrack.checked) {
+  if (isPolicyActive("fastTrack")) {
     patience += emergency ? 20 : 10;
+  }
+  if (isPolicyActive("comfortCare")) {
+    patience += emergency ? 12 : 8;
   }
   if (hasRoomBuilt("cafeteria")) {
     patience += 5;
@@ -4010,6 +5483,7 @@ const spawnPatient = ({ emergency = false, ailment, announce = emergency } = {})
   } else {
     state.queue.push(patient);
   }
+  state.stats.arrivalsToday += 1;
   if (announce) {
     const tone = emergency ? "warning" : "neutral";
     const verb = emergency ? "in crisis" : "seeking help for";
@@ -4025,8 +5499,9 @@ const adjustStaffMorale = () => {
     return;
   }
   const moraleDelta = state.rooms.some((room) => room.type === "staffroom") ? 1 : -1;
+  const mentorshipBoost = isPolicyActive("mentorship") ? 0.5 : 0;
   state.staff.forEach((member) => {
-    member.morale = Math.max(0, Math.min(100, member.morale + moraleDelta));
+    member.morale = Math.max(0, Math.min(100, member.morale + moraleDelta + mentorshipBoost));
   });
   state.stats.morale = Math.round(
     state.staff.reduce((acc, cur) => acc + cur.morale, 0) / state.staff.length
@@ -4109,10 +5584,19 @@ const processQueue = () => {
 
 const handleEmergencyEvents = () => {
   if (state.stats.tick < DAY_TICKS) return;
-  if (state.queue.some((patient) => patient.isEmergency)) return;
-  if (Math.random() < 0.08) {
+  const service = state.emergencyServices ?? {};
+  if (state.queue.some((patient) => patient.isEmergency) || service.pendingResponses?.length) return;
+  let chance = 0.08;
+  if (service.departmentReady && service.crewReady) {
+    chance += Math.min(0.12, (service.activeFleet ?? 0) * 0.02);
+  }
+  if (Math.random() < chance) {
     const emergency = spawnPatient({ emergency: true, ailment: randomFrom(emergencyCases), announce: true });
-    emergency.patience += 20;
+    emergency.patience += service.crewReady ? 24 : 20;
+    if (service.crewReady) {
+      emergency.arrivalMode = "ambulance";
+      logEvent(`${emergency.name} was ferried in by ambulance support.`, "warning");
+    }
   }
 };
 
@@ -4275,6 +5759,7 @@ const handleFacilitiesUpkeep = () => {
   const chefCount = countStaffByRole("chef");
   const assistantCount = countStaffByRole("assistant");
   const securityCount = countStaffByRole("security");
+  const paramedicCount = countStaffByRole("paramedic");
   if (hasRoomBuilt("cafeteria")) {
     if (assistantCount) {
       state.queue.forEach((patient) => {
@@ -4308,6 +5793,15 @@ const handleFacilitiesUpkeep = () => {
   if (hasRoomBuilt("securityoffice") && securityCount) {
     state.stats.efficiency = clamp(state.stats.efficiency + securityCount * 0.2, 0, 100);
   }
+  if (hasRoomBuilt("ambulancebay") && paramedicCount) {
+    state.queue.forEach((patient) => {
+      if (patient.isEmergency) {
+        patient.patience = clamp(patient.patience + Math.min(6, paramedicCount * 0.6), 0, 200);
+      }
+    });
+    state.stats.reputation = clamp(state.stats.reputation + paramedicCount * 0.15, 0, 100);
+    queueAdjusted = true;
+  }
   if (hasRoomBuilt("maternity") && countStaffByRole("midwife")) {
     state.stats.reputation = clamp(state.stats.reputation + 0.2, 0, 100);
   }
@@ -4337,11 +5831,28 @@ const logDailySummary = () => {
 const payExpenses = () => {
   const wages = state.staff.reduce((sum, staff) => sum + staff.salary, 0);
   const upkeep = state.rooms.reduce((sum, room) => sum + room.upkeep, 0);
-  const overtimeCost = elements.policies.overtime.checked ? wages * 0.15 : 0;
-  const total = wages + upkeep + overtimeCost;
+  const overtimeCost = isPolicyActive("overtime") ? wages * 0.15 : 0;
+  const mentorshipCost = isPolicyActive("mentorship") ? state.staff.length * 150 : 0;
+  let total = wages + upkeep + overtimeCost + mentorshipCost;
+  let auditSavings = 0;
+  if (isPolicyActive("audit")) {
+    auditSavings = Math.round(total * 0.12);
+    total -= auditSavings;
+  }
   state.stats.cash -= total;
   state.stats.expensesToday += total;
-  logEvent(`Daily upkeep paid: ¤${formatCurrency(total)}.`, "neutral");
+  const parts = [`Daily upkeep paid: ¤${formatCurrency(total)}.`];
+  if (overtimeCost) {
+    parts.push(`Overtime premiums: ¤${formatCurrency(overtimeCost)}.`);
+  }
+  if (mentorshipCost) {
+    parts.push(`Mentorship stipends: ¤${formatCurrency(mentorshipCost)}.`);
+  }
+  if (auditSavings) {
+    parts.push(`Audit savings: ¤${formatCurrency(auditSavings)}.`);
+    state.stats.reputation = Math.max(0, state.stats.reputation - 1);
+  }
+  logEvent(parts.join(" "), "neutral");
   if (state.stats.cash < 0) {
     state.stats.reputation = Math.max(0, state.stats.reputation - 3);
     logEvent("Debt accrued! Reputation suffers.", "negative");
@@ -4349,10 +5860,15 @@ const payExpenses = () => {
 };
 
 const decayMetrics = () => {
-  state.stats.cleanliness = Math.max(0, state.stats.cleanliness - 0.5);
-  state.stats.efficiency = Math.max(0, state.stats.efficiency - 0.4);
-  if (!elements.policies.overtime.checked) {
+  const cleanlinessDecay = isPolicyActive("hygiene") ? 0.2 : 0.5;
+  const efficiencyDrag = isPolicyActive("comfortCare") ? 0.6 : 0.4;
+  state.stats.cleanliness = Math.max(0, state.stats.cleanliness - cleanlinessDecay);
+  state.stats.efficiency = Math.max(0, state.stats.efficiency - efficiencyDrag);
+  if (!isPolicyActive("overtime")) {
     state.stats.morale = Math.max(0, state.stats.morale - 0.5);
+  }
+  if (isPolicyActive("hygiene")) {
+    state.stats.morale = Math.max(0, state.stats.morale - 0.15);
   }
   const litterDrag = (state.litter ?? 0) * 0.04;
   state.stats.grounds = clamp(state.stats.grounds - 0.08 - litterDrag, 0, 100);
@@ -4422,12 +5938,308 @@ const updateUI = () => {
   updateFinancePanels();
 };
 
+const applyLoadedState = (payload) => {
+  if (!payload?.state) {
+    return false;
+  }
+  const savedState = payload.state ?? {};
+  state.rooms = savedState.rooms ?? [];
+  state.staff = savedState.staff ?? [];
+  state.candidates = savedState.candidates ?? [];
+  state.marketingEffects = savedState.marketingEffects ?? [];
+  state.projects = mergeCollectionById(researchProjects, savedState.projects);
+  state.campaigns = mergeCollectionById(marketingCampaigns, savedState.campaigns);
+  state.queue = savedState.queue ?? [];
+  state.billingRecords = savedState.billingRecords ?? [];
+  state.loans = savedState.loans ?? [];
+  state.installmentPlans = savedState.installmentPlans ?? [];
+  state.properties = mergeCollectionById(createPropertyState(), savedState.properties);
+  state.litter = savedState.litter ?? 0;
+  state.ambience = {
+    environment: 0,
+    welfare: 0,
+    morale: 0,
+    reputation: 0,
+    ...(savedState.ambience ?? {}),
+  };
+  Object.assign(
+    state.stats,
+    {
+      day: 1,
+      tick: 0,
+      cash: STARTING_CASH,
+      reputation: 50,
+      patientsTreated: 0,
+      cleanliness: 75,
+      efficiency: 60,
+      morale: 70,
+      grounds: 72,
+      plantCare: 78,
+      revenueToday: 0,
+      expensesToday: 0,
+      environmentScore: 55,
+      welfareScore: 55,
+      arrivalsToday: 0,
+    },
+    savedState.stats ?? {}
+  );
+  Object.assign(
+    state.canvasView,
+    {
+      projection: "blueprint",
+      focus: "hospital",
+      selectedRoomId: null,
+      showWalls: true,
+      rotation: 0,
+      overlay: "layout",
+    },
+    savedState.canvasView ?? {}
+  );
+  Object.assign(
+    state.emergencyServices,
+    {
+      departmentReady: false,
+      bayCount: 0,
+      capacity: 0,
+      activeFleet: 0,
+      crewReady: false,
+      paramedicCount: 0,
+      autoDispatch: true,
+      cooldown: 0,
+      pendingResponses: [],
+      dispatchesToday: 0,
+    },
+    savedState.emergencyServices ?? {}
+  );
+  state.emergencyServices.pendingResponses =
+    savedState.emergencyServices?.pendingResponses ?? [];
+  state.objectives = hydrateObjectives(savedState.objectives);
+  state.grid = Array.from({ length: GRID_HEIGHT }, () => Array(GRID_WIDTH).fill(null));
+  state.rooms.forEach((room) => occupyRoomFootprint(room));
+  clearBuildSelection();
+  if (!state.candidates?.length) {
+    refreshCandidates();
+  }
+  recalculateAmbience();
+  invalidateCanvasCache();
+  updateGrid();
+  renderOwnedProperties();
+  renderPropertyMarket();
+  updatePropertyPurchaseButtons();
+  renderBuildOptions();
+  updateCanvasFocusOptions();
+  if (
+    state.canvasView.focus === "room" &&
+    !state.rooms.some((room) => room.id === state.canvasView.selectedRoomId)
+  ) {
+    state.canvasView.focus = "hospital";
+    state.canvasView.selectedRoomId = null;
+  }
+  updateProjectionButtons();
+  updateWallsButton();
+  updateRotateButton();
+  updateOverlayButtons();
+  updateOverlayPanels();
+  updateViewOverlayStats();
+  updateUI();
+  updateReportStats();
+  syncEmergencyServices();
+  updateEmergencyServicesPanel();
+  renderHospitalCanvas();
+  const counters = payload.counters ?? {};
+  const patientFallback = deriveNextIdFromCollection(state.queue);
+  patientIdCounter =
+    typeof counters.patientIdCounter === "number" && counters.patientIdCounter > 0
+      ? counters.patientIdCounter
+      : patientFallback;
+  const roomFallback = deriveNextIdFromCollection(state.rooms);
+  roomIdCounter =
+    typeof counters.roomIdCounter === "number" && counters.roomIdCounter > 0
+      ? counters.roomIdCounter
+      : roomFallback;
+  const staffFallback = deriveNextIdFromCollection(state.staff);
+  staffIdCounter =
+    typeof counters.staffIdCounter === "number" && counters.staffIdCounter > 0
+      ? counters.staffIdCounter
+      : staffFallback;
+  return true;
+};
+
+const handleSaveSlot = (slotId) => {
+  if (!isStorageAvailable) {
+    logEvent("Saving is unavailable because local storage is disabled.", "negative");
+    return;
+  }
+  try {
+    const payload = createSavePayload();
+    localStorage.setItem(getSaveStorageKey(slotId), JSON.stringify(payload));
+    renderSaveSlots();
+    highlightPanel("#panel-saves");
+    logEvent(
+      `${getSaveSlotLabel(slotId)} saved — Day ${state.stats.day}, cash ¤${formatCurrency(
+        state.stats.cash
+      )}.`,
+      "positive"
+    );
+  } catch (error) {
+    console.error("Failed to save game", error);
+    logEvent("Save failed. Storage may be full or disabled.", "negative");
+  }
+};
+
+const handleLoadSlot = (slotId) => {
+  if (!isStorageAvailable) {
+    logEvent("Loading is unavailable because local storage is disabled.", "negative");
+    return;
+  }
+  const slotData = readSaveSlot(slotId);
+  if (!slotData) {
+    logEvent(`${getSaveSlotLabel(slotId)} is empty.`, "negative");
+    return;
+  }
+  if (slotData.corrupted) {
+    logEvent(`${getSaveSlotLabel(slotId)} appears corrupted and cannot be loaded.`, "negative");
+    return;
+  }
+  if (slotData.version !== SAVE_VERSION) {
+    logEvent(
+      `${getSaveSlotLabel(slotId)} was created with an incompatible version and can't be loaded.`,
+      "negative"
+    );
+    return;
+  }
+  if (!slotData.state) {
+    logEvent(`${getSaveSlotLabel(slotId)} is missing save data.`, "negative");
+    return;
+  }
+  if (!applyLoadedState(slotData)) {
+    logEvent(`Failed to load ${getSaveSlotLabel(slotId)}.`, "negative");
+    return;
+  }
+  renderSaveSlots();
+  highlightPanel("#panel-saves");
+  logEvent(
+    `${getSaveSlotLabel(slotId)} loaded — welcome back to day ${state.stats.day}.`,
+    "positive"
+  );
+};
+
+const handleDeleteSlot = (slotId) => {
+  if (!isStorageAvailable) {
+    logEvent("Clearing saves isn't available because local storage is disabled.", "negative");
+    return;
+  }
+  try {
+    localStorage.removeItem(getSaveStorageKey(slotId));
+    renderSaveSlots();
+    highlightPanel("#panel-saves");
+    logEvent(`${getSaveSlotLabel(slotId)} cleared.`, "neutral");
+  } catch (error) {
+    console.error("Failed to delete save", error);
+    logEvent("Couldn't clear that save slot.", "negative");
+  }
+};
+
+const renderSaveSlots = () => {
+  const container = elements.saves?.container;
+  const template = elements.saves?.template;
+  if (!container || !template) return;
+  container.innerHTML = "";
+  if (elements.saves.warning) {
+    elements.saves.warning.hidden = isStorageAvailable;
+  }
+  const templateRoot = template.content.firstElementChild;
+  if (!templateRoot) {
+    return;
+  }
+  SAVE_SLOTS.forEach((slot) => {
+    const node = templateRoot.cloneNode(true);
+    node.dataset.slotId = slot.id;
+    const title = node.querySelector(".save-slot-title");
+    const meta = node.querySelector(".save-slot-meta");
+    const details = node.querySelector(".save-slot-details");
+    const saveBtn = node.querySelector(".save-slot-save");
+    const loadBtn = node.querySelector(".save-slot-load");
+    const deleteBtn = node.querySelector(".save-slot-delete");
+    if (title) {
+      title.textContent = slot.label;
+    }
+    const slotData = readSaveSlot(slot.id);
+    let loadDisabled = false;
+    let deleteDisabled = false;
+    if (!isStorageAvailable) {
+      if (meta) meta.textContent = "Storage unavailable";
+      if (details)
+        details.textContent = "Enable browser storage to save your hospital progress.";
+      loadDisabled = true;
+      deleteDisabled = true;
+    } else if (!slotData) {
+      if (meta) meta.textContent = "Empty slot";
+      if (details) details.textContent = "No save stored yet.";
+      loadDisabled = true;
+      deleteDisabled = true;
+    } else if (slotData.corrupted) {
+      if (meta) meta.textContent = "Corrupted data";
+      if (details) details.textContent = "Unable to read this save.";
+      loadDisabled = true;
+    } else if (slotData.version !== SAVE_VERSION) {
+      if (meta) meta.textContent = "Incompatible version";
+      if (details)
+        details.textContent = "Update the game before loading this save.";
+      loadDisabled = true;
+    } else if (!slotData.state) {
+      if (meta) meta.textContent = "Missing data";
+      if (details) details.textContent = "This save is incomplete and can't be loaded.";
+      loadDisabled = true;
+    } else {
+      const stats = slotData.state.stats ?? {};
+      const day = stats.day ?? 1;
+      const cash = typeof stats.cash === "number" ? stats.cash : STARTING_CASH;
+      const reputation = Math.round(stats.reputation ?? 0);
+      if (meta) meta.textContent = `Saved ${formatSaveTimestamp(slotData.timestamp)}`;
+      if (details)
+        details.textContent = `Day ${day} • Cash ¤${formatCurrency(cash)} • Reputation ${reputation}`;
+    }
+    if (saveBtn) {
+      saveBtn.disabled = !isStorageAvailable;
+      if (isStorageAvailable) {
+        saveBtn.addEventListener("click", () => handleSaveSlot(slot.id));
+      }
+    }
+    if (loadBtn) {
+      loadBtn.disabled = !isStorageAvailable || loadDisabled;
+      if (isStorageAvailable && !loadDisabled) {
+        loadBtn.addEventListener("click", () => handleLoadSlot(slot.id));
+      }
+    }
+    if (deleteBtn) {
+      deleteBtn.disabled = !isStorageAvailable || deleteDisabled;
+      if (isStorageAvailable && !deleteDisabled) {
+        deleteBtn.addEventListener("click", () => handleDeleteSlot(slot.id));
+      }
+    }
+    container.appendChild(node);
+  });
+};
+
+const setupSaveMenu = () => {
+  renderSaveSlots();
+  if (typeof window !== "undefined") {
+    window.addEventListener("storage", (event) => {
+      if (event.key && event.key.startsWith(SAVE_KEY_PREFIX)) {
+        renderSaveSlots();
+      }
+    });
+  }
+};
+
 const tick = () => {
   state.stats.tick += 1;
   if (state.stats.tick % 8 === 0) {
     spawnPatient({ announce: false });
   }
   handleEmergencyEvents();
+  processAmbulanceOperations();
   const patienceChanged = handlePatientPatience();
   processQueue();
   const facilitiesTouched = handleFacilitiesUpkeep();
@@ -4451,6 +6263,8 @@ const tick = () => {
     state.stats.day += 1;
     state.stats.revenueToday = 0;
     state.stats.expensesToday = 0;
+    state.stats.arrivalsToday = 0;
+    state.emergencyServices.dispatchesToday = 0;
     updateDailyReport();
     updateStats();
   }
@@ -4512,6 +6326,19 @@ const setupMenuRail = () => {
   });
 };
 
+const setupOverviewDropdown = () => {
+  const { toggle, panel } = elements.overviewDropdown;
+  if (!toggle || !panel) {
+    return;
+  }
+  toggle.addEventListener("click", () => {
+    const expanded = toggle.getAttribute("aria-expanded") === "true";
+    toggle.setAttribute("aria-expanded", String(!expanded));
+    panel.toggleAttribute("hidden", expanded);
+    toggle.classList.toggle("open", !expanded);
+  });
+};
+
 const setupTabs = () => {
   const buttons = document.querySelectorAll(".tab-button");
   buttons.forEach((button) => {
@@ -4559,6 +6386,7 @@ const setupDesignerControls = () => {
 
 const init = () => {
   setupCanvas();
+  setupCanvasViewControls();
   setupGrid();
   updateGrid();
   setupDesignerControls();
@@ -4571,6 +6399,11 @@ const init = () => {
   renderPropertyMarket();
   setupTabs();
   setupMenuRail();
+  setupOverviewDropdown();
+  setupPolicyMenu();
+  setupReportMenu();
+  setupSaveMenu();
+  setupEmergencyServicesPanel();
   refreshCandidates();
   renderCandidates();
   renderRoster();
@@ -4583,6 +6416,9 @@ const init = () => {
   updateDailyReport();
   updateFinancePanels();
   renderHospitalCanvas();
+  updateReportStats();
+  syncEmergencyServices();
+  updateEmergencyServicesPanel();
   logEvent("Welcome to Pulse Point Hospital!", "positive");
   document.addEventListener("keydown", (event) => {
     if (event.key === "Escape") {

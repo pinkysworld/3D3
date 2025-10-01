@@ -9,19 +9,74 @@
 <body>
   <div id="app">
     <header>
-      <h1>Pulse Point Hospital</h1>
-      <div class="stats">
-        <div>Day <span id="stat-day">1</span></div>
-        <div>Cash ¤<span id="stat-cash">150,000</span></div>
-        <div>Reputation <span id="stat-reputation">50</span></div>
-        <div>Patients Treated <span id="stat-treated">0</span></div>
-        <div>Environment <span id="stat-environment">55</span></div>
-        <div>Patient Welfare <span id="stat-welfare">55</span></div>
+      <div class="header-title">
+        <h1>Pulse Point Hospital</h1>
+      </div>
+      <div class="hud">
+        <div class="stats">
+          <div class="stat-chip">
+            <span class="stat-label">Day</span>
+            <span class="stat-value" id="stat-day">1</span>
+          </div>
+          <div class="stat-chip">
+            <span class="stat-label">Cash</span>
+            <span class="stat-value" id="stat-cash">¤150,000</span>
+          </div>
+          <div class="stat-chip">
+            <span class="stat-label">Reputation</span>
+            <span class="stat-value" id="stat-reputation">50</span>
+          </div>
+          <div class="stat-chip">
+            <span class="stat-label">Treated</span>
+            <span class="stat-value" id="stat-treated">0</span>
+          </div>
+          <div class="stat-chip">
+            <span class="stat-label">Environment</span>
+            <span class="stat-value" id="stat-environment">55</span>
+          </div>
+          <div class="stat-chip">
+            <span class="stat-label">Welfare</span>
+            <span class="stat-value" id="stat-welfare">55</span>
+          </div>
+        </div>
       </div>
     </header>
 
     <main>
       <aside class="menu-rail" aria-label="Primary navigation">
+        <section class="overview-dropdown">
+          <button
+            type="button"
+            class="overview-toggle"
+            aria-expanded="false"
+            aria-controls="overview-panel"
+          >
+            <span class="overview-title">Hospital Overview</span>
+            <span class="chevron" aria-hidden="true"></span>
+          </button>
+          <div class="overview-panel" id="overview-panel" hidden>
+            <div class="meter overview-meter">
+              <label for="meter-cleanliness">Cleanliness</label>
+              <progress id="meter-cleanliness" value="80" max="100"></progress>
+            </div>
+            <div class="meter overview-meter">
+              <label for="meter-efficiency">Efficiency</label>
+              <progress id="meter-efficiency" value="65" max="100"></progress>
+            </div>
+            <div class="meter overview-meter">
+              <label for="meter-morale">Staff Morale</label>
+              <progress id="meter-morale" value="70" max="100"></progress>
+            </div>
+            <div class="meter overview-meter">
+              <label for="meter-grounds">Grounds Care</label>
+              <progress id="meter-grounds" value="72" max="100"></progress>
+            </div>
+            <div class="meter overview-meter">
+              <label for="meter-plants">Plant Health</label>
+              <progress id="meter-plants" value="78" max="100"></progress>
+            </div>
+          </div>
+        </section>
         <div class="menu-block">
           <h2 class="menu-heading">Functions</h2>
           <nav class="tabs" role="tablist">
@@ -42,6 +97,22 @@
               data-panel="#panel-policies"
             >
               Hospital Policies
+            </button>
+            <button
+              class="menu-option"
+              role="listitem"
+              data-tab-target="overview"
+              data-panel="#panel-saves"
+            >
+              Game Saves
+            </button>
+            <button
+              class="menu-option"
+              role="listitem"
+              data-tab-target="overview"
+              data-panel="#panel-emergency-services"
+            >
+              Emergency Services
             </button>
             <button
               class="menu-option"
@@ -114,38 +185,240 @@
       <section class="sidebar tab-content" aria-label="Game controls">
         <section id="tab-overview" class="tab-panel active" role="tabpanel">
           <h2>Hospital Overview</h2>
-          <p>Balance your hospital's prestige, finance, and patient care. Keep staff happy and the wards running smoothly.</p>
-          <div class="meter">
-            <label for="meter-cleanliness">Cleanliness</label>
-            <progress id="meter-cleanliness" value="80" max="100"></progress>
+          <p>
+            Balance your hospital's prestige, finance, and patient care. Keep staff happy and the
+            wards running smoothly. Use the overview dropdown on the left rail for a quick glance at
+            the hospital's vital stats.
+          </p>
+          <div class="save-panel" id="panel-saves">
+            <h3>Game Saves</h3>
+            <p class="save-panel-intro">
+              Keep multiple save slots so you can experiment with your hospital without losing
+              progress. Saves are stored locally in your browser.
+            </p>
+            <div class="save-warning" id="save-storage-warning" hidden>
+              Saving is unavailable because local storage is disabled in this browser.
+            </div>
+            <div class="save-slots" id="save-slots" role="list"></div>
           </div>
-          <div class="meter">
-            <label for="meter-efficiency">Efficiency</label>
-            <progress id="meter-efficiency" value="65" max="100"></progress>
-          </div>
-          <div class="meter">
-            <label for="meter-morale">Staff Morale</label>
-            <progress id="meter-morale" value="70" max="100"></progress>
-          </div>
-          <div class="meter">
-            <label for="meter-grounds">Grounds Care</label>
-            <progress id="meter-grounds" value="72" max="100"></progress>
-          </div>
-          <div class="meter">
-            <label for="meter-plants">Plant Health</label>
-            <progress id="meter-plants" value="78" max="100"></progress>
-          </div>
+          <template id="save-slot-template">
+            <article class="save-slot" role="listitem">
+              <div class="save-slot-header">
+                <span class="save-slot-title"></span>
+                <span class="save-slot-meta"></span>
+              </div>
+              <p class="save-slot-details"></p>
+              <div class="save-slot-actions">
+                <button type="button" class="save-slot-save">Save</button>
+                <button type="button" class="save-slot-load">Load</button>
+                <button type="button" class="save-slot-delete">Delete</button>
+              </div>
+            </article>
+          </template>
           <div class="policies" id="panel-policies">
             <h3>Hospital Policies</h3>
-            <label>
-              <input type="checkbox" id="policy-fast-track" />
-              Fast-track emergency patients (higher cost, reputation boost)
-            </label>
-            <label>
-              <input type="checkbox" id="policy-overtime" />
-              Offer overtime pay (reduces morale loss, adds wage cost)
-            </label>
+            <p class="policy-intro">
+              Shape how the hospital reacts to each scenario. Tune patient priorities, staff support, and
+              financial directives to unlock new strategies.
+            </p>
+            <nav class="policy-tabs" role="tablist" aria-label="Policy categories">
+              <button
+                class="policy-tab active"
+                id="policy-tab-patients"
+                type="button"
+                role="tab"
+                aria-selected="true"
+                data-policy="patients"
+                aria-controls="policy-panel-patients"
+              >
+                Patient Care
+              </button>
+              <button
+                class="policy-tab"
+                id="policy-tab-staff"
+                type="button"
+                role="tab"
+                aria-selected="false"
+                data-policy="staff"
+                aria-controls="policy-panel-staff"
+              >
+                Staff Welfare
+              </button>
+              <button
+                class="policy-tab"
+                id="policy-tab-operations"
+                type="button"
+                role="tab"
+                aria-selected="false"
+                data-policy="operations"
+                aria-controls="policy-panel-operations"
+              >
+                Operations
+              </button>
+            </nav>
+            <div class="policy-panels">
+              <section
+                class="policy-panel active"
+                id="policy-panel-patients"
+                data-policy-panel="patients"
+                role="tabpanel"
+                aria-labelledby="policy-tab-patients"
+              >
+                <label class="policy-toggle">
+                  <input
+                    type="checkbox"
+                    id="policy-fast-track"
+                    data-policy-name="Fast-track Emergencies"
+                    data-policy-summary="Emergency arrivals jump the queue in exchange for higher running costs and a reputation bump."
+                    data-policy-on="Fast-track emergencies enabled."
+                    data-policy-off="Fast-track emergencies disabled."
+                  />
+                  <span>
+                    <strong>Fast-track Emergencies</strong>
+                    <small>Prioritize emergency patients for faster treatment. Costs more but impresses the city.</small>
+                  </span>
+                </label>
+                <label class="policy-toggle">
+                  <input
+                    type="checkbox"
+                    id="policy-comfort-care"
+                    data-policy-name="Comfort Care Initiative"
+                    data-policy-summary="Nurses provide extra comforts, increasing patient patience while slowing throughput slightly."
+                    data-policy-on="Comfort care initiative activated."
+                    data-policy-off="Comfort care initiative suspended."
+                  />
+                  <span>
+                    <strong>Comfort Care Initiative</strong>
+                    <small>Offer hospitality touches to boost patient patience and welfare at a slight efficiency trade-off.</small>
+                  </span>
+                </label>
+              </section>
+              <section
+                class="policy-panel"
+                id="policy-panel-staff"
+                data-policy-panel="staff"
+                role="tabpanel"
+                aria-labelledby="policy-tab-staff"
+                aria-hidden="true"
+              >
+                <label class="policy-toggle">
+                  <input
+                    type="checkbox"
+                    id="policy-overtime"
+                    data-policy-name="Overtime Pay"
+                    data-policy-summary="Compensate staff overtime to reduce morale loss at the expense of payroll."
+                    data-policy-on="Overtime pay approved."
+                    data-policy-off="Overtime pay withdrawn."
+                  />
+                  <span>
+                    <strong>Overtime Pay</strong>
+                    <small>Cover late shifts with paid overtime to steady morale while adding a premium to wages.</small>
+                  </span>
+                </label>
+                <label class="policy-toggle">
+                  <input
+                    type="checkbox"
+                    id="policy-mentorship"
+                    data-policy-name="Mentorship Program"
+                    data-policy-summary="Pair rookies with veterans, lifting morale growth while funding monthly stipends."
+                    data-policy-on="Mentorship program launched."
+                    data-policy-off="Mentorship program paused."
+                  />
+                  <span>
+                    <strong>Mentorship Program</strong>
+                    <small>Invest in mentoring to gently raise staff morale and skill at a recurring training cost.</small>
+                  </span>
+                </label>
+              </section>
+              <section
+                class="policy-panel"
+                id="policy-panel-operations"
+                data-policy-panel="operations"
+                role="tabpanel"
+                aria-labelledby="policy-tab-operations"
+                aria-hidden="true"
+              >
+                <label class="policy-toggle">
+                  <input
+                    type="checkbox"
+                    id="policy-hygiene-drive"
+                    data-policy-name="Hygiene Drive"
+                    data-policy-summary="Daily spot checks slow cleanliness decay but test staff patience."
+                    data-policy-on="Hygiene drive announced."
+                    data-policy-off="Hygiene drive concluded."
+                  />
+                  <span>
+                    <strong>Hygiene Drive</strong>
+                    <small>Enforce strict sanitation rounds to keep wards spotless, slightly tiring your team.</small>
+                  </span>
+                </label>
+                <label class="policy-toggle">
+                  <input
+                    type="checkbox"
+                    id="policy-budget-audit"
+                    data-policy-name="Budget Audit"
+                    data-policy-summary="Cost-cutting reviews trim daily expenses but hurt reputation with the press."
+                    data-policy-on="Budget audits in effect."
+                    data-policy-off="Budget audits discontinued."
+                  />
+                  <span>
+                    <strong>Budget Audit</strong>
+                    <small>Authorise auditors to shave expenses each day at the risk of sounding stingy.</small>
+                  </span>
+                </label>
+              </section>
+            </div>
+            <div class="policy-summary" id="policy-summary">
+              <h4>Active Directives</h4>
+              <ul></ul>
+            </div>
           </div>
+          <section class="emergency-services" id="panel-emergency-services" aria-label="Emergency services">
+            <div class="emergency-header">
+              <div>
+                <h3>Emergency Services Command</h3>
+                <p>
+                  Coordinate the trauma wing and ambulance crews to keep emergency patients flowing without
+                  overwhelming the hospital floor.
+                </p>
+              </div>
+              <span class="emergency-status-indicator" id="emergency-status">Standby</span>
+            </div>
+            <dl class="emergency-readiness">
+              <div>
+                <dt>Emergency Department</dt>
+                <dd id="emergency-department">Not built</dd>
+              </div>
+              <div>
+                <dt>Ambulance Bays</dt>
+                <dd id="emergency-bays">0</dd>
+              </div>
+              <div>
+                <dt>Paramedic Crew</dt>
+                <dd id="emergency-crew">0 on duty</dd>
+              </div>
+              <div>
+                <dt>Fleet Ready</dt>
+                <dd id="emergency-fleet">0 units</dd>
+              </div>
+              <div>
+                <dt>Dispatch Status</dt>
+                <dd id="emergency-readiness">Awaiting deployment</dd>
+              </div>
+            </dl>
+            <div class="emergency-actions">
+              <button type="button" id="plan-emergency-room">Plan Emergency Department</button>
+              <button type="button" id="plan-ambulance-bay">Add Ambulance Bay</button>
+              <button type="button" id="dispatch-ambulance">Dispatch Ambulance</button>
+            </div>
+            <label class="emergency-auto" for="toggle-ambulance-auto">
+              <input type="checkbox" id="toggle-ambulance-auto" checked />
+              <span>Auto-dispatch ambulances when no emergencies are queued</span>
+            </label>
+            <p class="emergency-summary" id="emergency-summary">
+              Build the Emergency Department to unlock trauma care and ambulance coordination.
+            </p>
+          </section>
           <section id="panel-finance" class="finance-panel" aria-label="Hospital finance options">
             <h3>Finance &amp; Billing</h3>
             <p>Secure loans for expansion and monitor how patients settle their care costs.</p>
@@ -256,6 +529,139 @@
             Pick a room on the Build tab to start construction. Expand the campus by purchasing parcels in Hospital Grounds.
           </div>
         </div>
+        <nav class="view-ribbon" role="menubar" aria-label="Hospital overlays">
+          <button
+            type="button"
+            class="ribbon-button active"
+            role="menuitemradio"
+            aria-pressed="true"
+            data-overlay="layout"
+          >
+            Layout
+          </button>
+          <button
+            type="button"
+            class="ribbon-button"
+            role="menuitemradio"
+            aria-pressed="false"
+            data-overlay="patients"
+          >
+            Patient Flow
+          </button>
+          <button
+            type="button"
+            class="ribbon-button"
+            role="menuitemradio"
+            aria-pressed="false"
+            data-overlay="staff"
+          >
+            Staffing
+          </button>
+          <button
+            type="button"
+            class="ribbon-button"
+            role="menuitemradio"
+            aria-pressed="false"
+            data-overlay="maintenance"
+          >
+            Maintenance
+          </button>
+        </nav>
+        <div class="ribbon-panels" aria-live="polite">
+          <article class="ribbon-panel active" data-overlay-panel="layout">
+            <h3>Layout Overview</h3>
+            <p>See how your footprint is distributed across owned parcels and empty plots.</p>
+            <dl class="ribbon-statblock">
+              <div>
+                <dt>Total Rooms</dt>
+                <dd id="overlay-stat-rooms">0</dd>
+              </div>
+              <div>
+                <dt>Owned Parcels</dt>
+                <dd id="overlay-stat-parcels">0</dd>
+              </div>
+              <div>
+                <dt>Open Plots</dt>
+                <dd id="overlay-stat-plots">0</dd>
+              </div>
+            </dl>
+          </article>
+          <article class="ribbon-panel" data-overlay-panel="patients" aria-hidden="true">
+            <h3>Patient Flow</h3>
+            <p>Track the queue and severity mix to prioritize treatment upgrades.</p>
+            <dl class="ribbon-statblock">
+              <div>
+                <dt>Waiting Patients</dt>
+                <dd id="overlay-stat-queue">0</dd>
+              </div>
+              <div>
+                <dt>Avg. Severity</dt>
+                <dd id="overlay-stat-severity">0.0</dd>
+              </div>
+              <div>
+                <dt>Emergency Share</dt>
+                <dd id="overlay-stat-emergency">0%</dd>
+              </div>
+            </dl>
+          </article>
+          <article class="ribbon-panel" data-overlay-panel="staff" aria-hidden="true">
+            <h3>Staffing</h3>
+            <p>Review staffing coverage and role diversity per treatment department.</p>
+            <dl class="ribbon-statblock">
+              <div>
+                <dt>Total Staff</dt>
+                <dd id="overlay-stat-staff">0</dd>
+              </div>
+              <div>
+                <dt>Active Roles</dt>
+                <dd id="overlay-stat-roles">0</dd>
+              </div>
+              <div>
+                <dt>Avg. Morale</dt>
+                <dd id="overlay-stat-morale">0%</dd>
+              </div>
+            </dl>
+          </article>
+          <article class="ribbon-panel" data-overlay-panel="maintenance" aria-hidden="true">
+            <h3>Maintenance</h3>
+            <p>Spot areas that boost environment and welfare for a happier hospital.</p>
+            <dl class="ribbon-statblock">
+              <div>
+                <dt>Environment</dt>
+                <dd id="overlay-stat-environment">0</dd>
+              </div>
+              <div>
+                <dt>Welfare</dt>
+                <dd id="overlay-stat-welfare">0</dd>
+              </div>
+              <div>
+                <dt>Decor Assets</dt>
+                <dd id="overlay-stat-decor">0</dd>
+              </div>
+            </dl>
+          </article>
+        </div>
+        <div class="canvas-toolbar" role="group" aria-label="Hospital view controls">
+          <div class="toolbar-section">
+            <span class="toolbar-label">Projection</span>
+            <button type="button" class="view-toggle active" data-projection="blueprint">
+              Blueprint
+            </button>
+            <button type="button" class="view-toggle" data-projection="isometric">
+              Isometric
+            </button>
+          </div>
+          <div class="toolbar-section">
+            <label for="view-focus" class="toolbar-label">Focus</label>
+            <select id="view-focus" aria-label="Canvas focus">
+              <option value="hospital">Whole hospital</option>
+            </select>
+          </div>
+          <div class="toolbar-section toolbar-actions">
+            <button type="button" id="toggle-walls" aria-pressed="true">Hide walls</button>
+            <button type="button" id="rotate-view">Rotate view</button>
+          </div>
+        </div>
         <canvas
           id="hospital-canvas"
           width="672"
@@ -265,6 +671,154 @@
       </section>
 
       <aside class="sidebar secondary" aria-label="Operations">
+        <section class="reports" aria-label="Hospital reports">
+          <h2>Hospital Reports</h2>
+          <nav class="report-tabs" role="tablist">
+            <button
+              id="report-tab-financial"
+              class="report-tab active"
+              type="button"
+              data-report="financial"
+              role="tab"
+              aria-controls="report-financial"
+              aria-selected="true"
+            >
+              Financial
+            </button>
+            <button
+              id="report-tab-patients"
+              class="report-tab"
+              type="button"
+              data-report="patients"
+              role="tab"
+              aria-controls="report-patients"
+              aria-selected="false"
+            >
+              Patients
+            </button>
+            <button
+              id="report-tab-operations"
+              class="report-tab"
+              type="button"
+              data-report="operations"
+              role="tab"
+              aria-controls="report-operations"
+              aria-selected="false"
+            >
+              Operations
+            </button>
+          </nav>
+          <div class="report-panels">
+            <article
+              id="report-financial"
+              class="report-panel active"
+              data-report-panel="financial"
+              role="tabpanel"
+              aria-labelledby="report-tab-financial"
+            >
+              <dl class="report-statblock">
+                <div>
+                  <dt>Cash on Hand</dt>
+                  <dd id="report-cash">¤150,000</dd>
+                </div>
+                <div>
+                  <dt>Revenue Today</dt>
+                  <dd id="report-revenue">¤0</dd>
+                </div>
+                <div>
+                  <dt>Expenses Today</dt>
+                  <dd id="report-expenses">¤0</dd>
+                </div>
+                <div>
+                  <dt>Net Income</dt>
+                  <dd id="report-net">¤0</dd>
+                </div>
+                <div>
+                  <dt>Profit Margin</dt>
+                  <dd id="report-margin">—</dd>
+                </div>
+                <div>
+                  <dt>Loans Outstanding</dt>
+                  <dd id="report-loans">¤0</dd>
+                </div>
+                <div>
+                  <dt>Receivables</dt>
+                  <dd id="report-receivables">¤0</dd>
+                </div>
+              </dl>
+            </article>
+            <article
+              id="report-patients"
+              class="report-panel"
+              data-report-panel="patients"
+              role="tabpanel"
+              aria-labelledby="report-tab-patients"
+              aria-hidden="true"
+            >
+              <dl class="report-statblock">
+                <div>
+                  <dt>Queue Length</dt>
+                  <dd id="report-queue">0</dd>
+                </div>
+                <div>
+                  <dt>Emergency Share</dt>
+                  <dd id="report-emergency">0%</dd>
+                </div>
+                <div>
+                  <dt>Avg. Severity</dt>
+                  <dd id="report-severity">0.0</dd>
+                </div>
+                <div>
+                  <dt>Avg. Patience</dt>
+                  <dd id="report-patience">0%</dd>
+                </div>
+                <div>
+                  <dt>Patients Treated</dt>
+                  <dd id="report-treated">0</dd>
+                </div>
+                <div>
+                  <dt>Daily Arrivals</dt>
+                  <dd id="report-arrivals">0</dd>
+                </div>
+              </dl>
+            </article>
+            <article
+              id="report-operations"
+              class="report-panel"
+              data-report-panel="operations"
+              role="tabpanel"
+              aria-labelledby="report-tab-operations"
+              aria-hidden="true"
+            >
+              <dl class="report-statblock">
+                <div>
+                  <dt>Active Rooms</dt>
+                  <dd id="report-rooms">0</dd>
+                </div>
+                <div>
+                  <dt>Owned Parcels</dt>
+                  <dd id="report-parcels">1</dd>
+                </div>
+                <div>
+                  <dt>Total Staff</dt>
+                  <dd id="report-staff">0</dd>
+                </div>
+                <div>
+                  <dt>Avg. Morale</dt>
+                  <dd id="report-morale">0%</dd>
+                </div>
+                <div>
+                  <dt>Efficiency</dt>
+                  <dd id="report-efficiency">60%</dd>
+                </div>
+                <div>
+                  <dt>Environment</dt>
+                  <dd id="report-environment">55</dd>
+                </div>
+              </dl>
+            </article>
+          </div>
+        </section>
         <section>
           <h2>Patient Queue</h2>
           <ul id="patient-queue" class="queue-list"></ul>
