@@ -15,6 +15,9 @@ const NEW_ROOM_HIGHLIGHT_TICKS = 36;
 const MIN_SHOWCASE_ZOOM = 0.65;
 const MAX_SHOWCASE_ZOOM = 1.8;
 const SHOWCASE_PAN_PADDING = 0.35;
+const AUDIO_SETTINGS_STORAGE_KEY = "pulse-point-hospital-audio-settings";
+const DEFAULT_AUDIO_SETTINGS = { music: true, sfx: true };
+const BACKGROUND_MUSIC_DURATION = 8;
 const showcaseAnimation = {
   time: 0,
   pulse: 0,
@@ -1128,6 +1131,16 @@ const restoreObjectives = (progress = []) => {
 
 const clamp = (value, min, max) => Math.max(min, Math.min(max, value));
 
+const hashString = (value) => {
+  if (!value) return 0;
+  let hash = 0;
+  for (let i = 0; i < value.length; i += 1) {
+    hash = (hash << 5) - hash + value.charCodeAt(i);
+    hash |= 0;
+  }
+  return Math.abs(hash);
+};
+
 const normalizeHex = (hex) => {
   if (!hex) return "#000000";
   let value = hex.trim();
@@ -1378,9 +1391,15 @@ const elements = {
     message: document.querySelector("#save-menu-message"),
     openButton: document.querySelector("#open-save-menu"),
   },
+  audio: {
+    musicToggle: document.querySelector("#toggle-music"),
+    sfxToggle: document.querySelector("#toggle-sfx"),
+  },
 };
 
-const menuOptions = Array.from(document.querySelectorAll(".menu-option:not([data-modal])"));
+const menuOptions = Array.from(
+  document.querySelectorAll(".menu-option:not([data-modal]):not([data-audio-toggle])")
+);
 
 let selectedRoom = null;
 let patientIdCounter = 1;
@@ -1400,12 +1419,290 @@ let showcasePanPointerId = null;
 let showcasePanLastPoint = null;
 let lastFocusedBeforeSaveMenu = null;
 let lastFocusedBeforeLotOverview = null;
+let audioSettings = { ...DEFAULT_AUDIO_SETTINGS };
+let audioContextInstance = null;
+let musicGainNode = null;
+let sfxGainNode = null;
+let backgroundMusicSource = null;
+let backgroundMusicBuffer = null;
+let hasBoundGlobalUiSfx = false;
+let audioUnlockBound = false;
 
 const invalidateCanvasCache = () => {
   blueprintBuffer = null;
   emptyTileSprite = null;
   lockedTileSprite = null;
   themedTileCache.clear();
+};
+
+const loadAudioSettings = () => {
+  try {
+    const raw = localStorage.getItem(AUDIO_SETTINGS_STORAGE_KEY);
+    if (!raw) {
+      return { ...DEFAULT_AUDIO_SETTINGS };
+    }
+    const parsed = JSON.parse(raw);
+    return {
+      ...DEFAULT_AUDIO_SETTINGS,
+      ...(typeof parsed === "object" && parsed ? parsed : {}),
+    };
+  } catch (error) {
+    return { ...DEFAULT_AUDIO_SETTINGS };
+  }
+};
+
+const saveAudioSettings = () => {
+  try {
+    localStorage.setItem(AUDIO_SETTINGS_STORAGE_KEY, JSON.stringify(audioSettings));
+  } catch (error) {
+    // Ignore storage failures (e.g. private mode)
+  }
+};
+
+const ensureAudioContext = () => {
+  if (audioContextInstance) {
+    return audioContextInstance;
+  }
+  const AudioContextClass = window.AudioContext || window.webkitAudioContext;
+  if (!AudioContextClass) {
+    return null;
+  }
+  audioContextInstance = new AudioContextClass();
+  musicGainNode = audioContextInstance.createGain();
+  sfxGainNode = audioContextInstance.createGain();
+  musicGainNode.gain.value = audioSettings.music ? 0.4 : 0;
+  sfxGainNode.gain.value = audioSettings.sfx ? 0.7 : 0;
+  musicGainNode.connect(audioContextInstance.destination);
+  sfxGainNode.connect(audioContextInstance.destination);
+  return audioContextInstance;
+};
+
+const resumeAudioContext = () => {
+  const context = ensureAudioContext();
+  if (!context) {
+    return null;
+  }
+  if (context.state === "suspended") {
+    context.resume();
+  }
+  return context;
+};
+
+const getBackgroundMusicBuffer = () => {
+  const context = ensureAudioContext();
+  if (!context) {
+    return null;
+  }
+  if (backgroundMusicBuffer) {
+    return backgroundMusicBuffer;
+  }
+  const sampleRate = context.sampleRate;
+  const length = Math.floor(sampleRate * BACKGROUND_MUSIC_DURATION);
+  const buffer = context.createBuffer(1, length, sampleRate);
+  const data = buffer.getChannelData(0);
+  for (let i = 0; i < length; i += 1) {
+    const t = i / sampleRate;
+    const slowLfoA = (Math.sin(2 * Math.PI * 0.125 * t) + 1) / 2;
+    const slowLfoB = (Math.sin(2 * Math.PI * 0.25 * t + Math.PI / 3) + 1) / 2;
+    const voiceA = Math.sin(2 * Math.PI * 220 * t);
+    const voiceB = Math.sin(2 * Math.PI * 275 * t);
+    const voiceC = Math.sin(2 * Math.PI * 330 * t);
+    const shimmer = Math.sin(2 * Math.PI * 440 * t) * 0.12 * slowLfoB;
+    const pad = voiceA * 0.4 * slowLfoA + voiceB * 0.28 * slowLfoB + voiceC * 0.22;
+    data[i] = (pad + shimmer) * 0.3;
+  }
+  backgroundMusicBuffer = buffer;
+  return buffer;
+};
+
+const startBackgroundMusic = () => {
+  if (!audioSettings.music) {
+    return;
+  }
+  const context = resumeAudioContext();
+  const buffer = getBackgroundMusicBuffer();
+  if (!context || !buffer || backgroundMusicSource) {
+    return;
+  }
+  const now = context.currentTime;
+  musicGainNode.gain.cancelScheduledValues(now);
+  musicGainNode.gain.setValueAtTime(Math.max(0, musicGainNode.gain.value), now);
+  musicGainNode.gain.linearRampToValueAtTime(0.4, now + 0.6);
+  const source = context.createBufferSource();
+  source.buffer = buffer;
+  source.loop = true;
+  source.connect(musicGainNode);
+  source.onended = () => {
+    if (backgroundMusicSource === source) {
+      backgroundMusicSource = null;
+    }
+  };
+  source.start(now + 0.05);
+  backgroundMusicSource = source;
+};
+
+const stopBackgroundMusic = () => {
+  if (!audioContextInstance || !musicGainNode) {
+    return;
+  }
+  const context = audioContextInstance;
+  const now = context.currentTime;
+  musicGainNode.gain.cancelScheduledValues(now);
+  musicGainNode.gain.setValueAtTime(Math.max(0, musicGainNode.gain.value), now);
+  musicGainNode.gain.linearRampToValueAtTime(0, now + 0.4);
+  if (backgroundMusicSource) {
+    const source = backgroundMusicSource;
+    backgroundMusicSource = null;
+    source.stop(now + 0.45);
+  }
+};
+
+const SFX_PRESETS = {
+  ui: { start: 520, end: 640, duration: 0.18, volume: 0.32, type: "triangle" },
+  positive: { start: 660, end: 880, duration: 0.32, volume: 0.36, type: "sine" },
+  warning: { start: 440, end: 520, duration: 0.24, volume: 0.34, type: "sawtooth" },
+  negative: { start: 420, end: 260, duration: 0.28, volume: 0.34, type: "triangle" },
+};
+
+const playSfx = (tone = "ui") => {
+  if (!audioSettings.sfx) {
+    return;
+  }
+  const context = ensureAudioContext();
+  if (!context || !sfxGainNode || context.state === "suspended") {
+    return;
+  }
+  const preset = SFX_PRESETS[tone] ?? SFX_PRESETS.ui;
+  const oscillator = context.createOscillator();
+  oscillator.type = preset.type;
+  const gain = context.createGain();
+  const startTime = context.currentTime + 0.001;
+  gain.gain.setValueAtTime(0, startTime);
+  gain.gain.linearRampToValueAtTime(preset.volume, startTime + 0.01);
+  gain.gain.linearRampToValueAtTime(0, startTime + preset.duration);
+  oscillator.frequency.setValueAtTime(preset.start, startTime);
+  oscillator.frequency.linearRampToValueAtTime(preset.end, startTime + preset.duration);
+  oscillator.connect(gain);
+  gain.connect(sfxGainNode);
+  oscillator.start(startTime);
+  oscillator.stop(startTime + preset.duration + 0.05);
+};
+
+const updateAudioToggleButtons = () => {
+  const { musicToggle, sfxToggle } = elements.audio;
+  if (musicToggle) {
+    musicToggle.setAttribute("aria-pressed", audioSettings.music ? "true" : "false");
+    musicToggle.textContent = `Music: ${audioSettings.music ? "On" : "Off"}`;
+  }
+  if (sfxToggle) {
+    sfxToggle.setAttribute("aria-pressed", audioSettings.sfx ? "true" : "false");
+    sfxToggle.textContent = `Sound Effects: ${audioSettings.sfx ? "On" : "Off"}`;
+  }
+};
+
+const handleGlobalUiClickForSfx = (event) => {
+  if (!audioSettings.sfx) {
+    return;
+  }
+  const actionable = event.target.closest("button, [role=\"button\"], .build-chip");
+  if (!actionable) {
+    return;
+  }
+  if (actionable.hasAttribute("data-audio-toggle")) {
+    return;
+  }
+  resumeAudioContext();
+  playSfx("ui");
+};
+
+const bindGlobalUiSfx = () => {
+  if (hasBoundGlobalUiSfx) {
+    return;
+  }
+  document.addEventListener("click", handleGlobalUiClickForSfx);
+  hasBoundGlobalUiSfx = true;
+};
+
+const setupAudioUnlock = () => {
+  if (audioUnlockBound) {
+    return;
+  }
+  const unlock = () => {
+    document.removeEventListener("pointerdown", unlock);
+    document.removeEventListener("keydown", unlock);
+    const context = resumeAudioContext();
+    if (!context) {
+      return;
+    }
+    const targetContext = context;
+    requestAnimationFrame(() => {
+      if (audioSettings.music) {
+        startBackgroundMusic();
+      } else if (musicGainNode) {
+        musicGainNode.gain.setValueAtTime(0, targetContext.currentTime);
+      }
+    });
+  };
+  document.addEventListener("pointerdown", unlock, { once: true });
+  document.addEventListener("keydown", unlock, { once: true });
+  audioUnlockBound = true;
+};
+
+const disableUnsupportedAudioToggle = (button, label) => {
+  if (!button) {
+    return;
+  }
+  button.textContent = `${label}: Unsupported`;
+  button.setAttribute("aria-pressed", "false");
+  button.setAttribute("aria-disabled", "true");
+  button.disabled = true;
+};
+
+const setupAudioControls = () => {
+  audioSettings = loadAudioSettings();
+  const audioSupported = Boolean(window.AudioContext || window.webkitAudioContext);
+  if (!audioSupported) {
+    disableUnsupportedAudioToggle(elements.audio.musicToggle, "Music");
+    disableUnsupportedAudioToggle(elements.audio.sfxToggle, "Sound Effects");
+    return;
+  }
+  updateAudioToggleButtons();
+  bindGlobalUiSfx();
+  setupAudioUnlock();
+  const { musicToggle, sfxToggle } = elements.audio;
+  if (musicToggle) {
+    musicToggle.addEventListener("click", () => {
+      audioSettings.music = !audioSettings.music;
+      updateAudioToggleButtons();
+      saveAudioSettings();
+      if (audioSettings.music) {
+        resumeAudioContext();
+        startBackgroundMusic();
+        playSfx("positive");
+      } else {
+        stopBackgroundMusic();
+      }
+    });
+  }
+  if (sfxToggle) {
+    sfxToggle.addEventListener("click", () => {
+      audioSettings.sfx = !audioSettings.sfx;
+      const context = ensureAudioContext();
+      if (context && sfxGainNode) {
+        const now = context.currentTime;
+        sfxGainNode.gain.cancelScheduledValues(now);
+        sfxGainNode.gain.setValueAtTime(Math.max(0, sfxGainNode.gain.value), now);
+        const target = audioSettings.sfx ? 0.7 : 0;
+        sfxGainNode.gain.linearRampToValueAtTime(target, now + 0.15);
+      }
+      updateAudioToggleButtons();
+      saveAudioSettings();
+      if (audioSettings.sfx) {
+        resumeAudioContext();
+        playSfx("positive");
+      }
+    });
+  }
 };
 
 const computeWheelZoomFactor = (deltaY) => {
@@ -1780,6 +2077,13 @@ const getRoomTileSprite = (theme, visualKey, visual) => {
       ctx.lineTo(offset - CANVAS_CELL, CANVAS_CELL - 4);
       ctx.stroke();
     }
+    ctx.strokeStyle = withAlpha(shiftColor(baseColor, -0.18), 0.35);
+    for (let stripe = 8; stripe < CANVAS_CELL - 8; stripe += 6) {
+      ctx.beginPath();
+      ctx.moveTo(6, stripe);
+      ctx.lineTo(CANVAS_CELL - 6, stripe);
+      ctx.stroke();
+    }
     ctx.globalAlpha = 1;
     ctx.restore();
     ctx.shadowBlur = 0;
@@ -1803,6 +2107,59 @@ const getRoomTileSprite = (theme, visualKey, visual) => {
   return themedTileCache.get(cacheKey);
 };
 
+const CUSTOM_SIZE_ID_PATTERN = /^custom-(\d+)x(\d+)$/i;
+const customSizeCache = new Map();
+
+const createCustomLayoutOption = (width, height) => {
+  const safeWidth = Math.max(1, Number(width) || 1);
+  const safeHeight = Math.max(1, Number(height) || 1);
+  const cacheKey = `${safeWidth}x${safeHeight}`;
+  if (customSizeCache.has(cacheKey)) {
+    return customSizeCache.get(cacheKey);
+  }
+  const area = safeWidth * safeHeight;
+  const areaBonus = Math.max(0, area - 1);
+  const aspectRatio = safeWidth > safeHeight ? safeWidth / safeHeight : safeHeight / safeWidth;
+  const stretchPenalty = Math.max(0, aspectRatio - 1) * 0.1;
+
+  const costMultiplier = Number((1 + areaBonus * 0.3).toFixed(2));
+  const upkeepMultiplier = Number((1 + areaBonus * 0.12 + stretchPenalty * 0.05).toFixed(2));
+  const severityBonus = Number((Math.max(0, area - 2) * 0.35 - stretchPenalty * 0.3).toFixed(2));
+  const environmentBonus = Number(
+    Math.max(0.2, Math.min(1.6, 0.25 + areaBonus * 0.32 - stretchPenalty * 0.2)).toFixed(2)
+  );
+
+  const labelBase = safeWidth === safeHeight ? "Suite" : "Wing";
+  const option = {
+    id: `custom-${cacheKey}`,
+    label: `Custom ${safeWidth}×${safeHeight} ${labelBase}`,
+    width: safeWidth,
+    height: safeHeight,
+    costMultiplier,
+    upkeepMultiplier,
+    severityBonus: Math.max(0, severityBonus),
+    environmentBonus,
+    description: "Drag-sized layout tailored to your blueprint.",
+  };
+  customSizeCache.set(cacheKey, option);
+  return option;
+};
+
+const getSizeOption = (id) => {
+  if (!id) {
+    return ROOM_SIZE_LIBRARY[0];
+  }
+  const preset = ROOM_SIZE_LIBRARY.find((option) => option.id === id);
+  if (preset) {
+    return preset;
+  }
+  const match = typeof id === "string" ? id.match(CUSTOM_SIZE_ID_PATTERN) : null;
+  if (match) {
+    return createCustomLayoutOption(Number(match[1]), Number(match[2]));
+  }
+  return ROOM_SIZE_LIBRARY[0];
+};
+
 const designerState = {
   blueprint: null,
   sizeId: ROOM_SIZE_LIBRARY[0].id,
@@ -1815,7 +2172,34 @@ const designerState = {
 
 let buildMenuTab = "rooms";
 
-const getSizeOption = (id) => ROOM_SIZE_LIBRARY.find((option) => option.id === id) ?? ROOM_SIZE_LIBRARY[0];
+const buildPreviewState = {
+  active: false,
+  pointerId: null,
+  captureElement: null,
+  startX: 0,
+  startY: 0,
+  x: 0,
+  y: 0,
+  width: 0,
+  height: 0,
+  valid: false,
+  justPlaced: false,
+};
+
+const resetBuildPreview = () => {
+  buildPreviewState.active = false;
+  buildPreviewState.pointerId = null;
+  buildPreviewState.captureElement = null;
+  buildPreviewState.startX = 0;
+  buildPreviewState.startY = 0;
+  buildPreviewState.x = 0;
+  buildPreviewState.y = 0;
+  buildPreviewState.width = 0;
+  buildPreviewState.height = 0;
+  buildPreviewState.valid = false;
+  buildPreviewState.justPlaced = false;
+  updateGridPreviewHighlight();
+};
 
 const getInteriorTheme = (id) =>
   ROOM_INTERIOR_LIBRARY.find((theme) => theme.id === id) ?? ROOM_INTERIOR_LIBRARY[0];
@@ -1826,8 +2210,8 @@ const getMachineDefinition = (id) =>
 const getDecorationDefinition = (id) =>
   ROOM_DECOR_LIBRARY.find((decor) => decor.id === id) ?? ROOM_DECOR_LIBRARY[0];
 
-const summarizeRoomDesign = ({ blueprint, sizeId, interiorId, machines, decorations }) => {
-  const sizeOption = getSizeOption(sizeId);
+const summarizeRoomDesign = ({ blueprint, sizeId, layoutOverride, interiorId, machines, decorations }) => {
+  const sizeOption = layoutOverride ?? getSizeOption(sizeId);
   const interior = getInteriorTheme(interiorId);
   const machineDefs = machines.map(getMachineDefinition);
   const decorDefs = decorations.map(getDecorationDefinition);
@@ -2336,6 +2720,17 @@ const logEvent = (message, tone = "neutral") => {
   while (elements.eventLog.children.length > 8) {
     elements.eventLog.removeChild(elements.eventLog.lastElementChild);
   }
+  if (tone !== "neutral") {
+    const toneToSfx = {
+      positive: "positive",
+      negative: "negative",
+      warning: "warning",
+    };
+    const sfxTone = toneToSfx[tone];
+    if (sfxTone) {
+      playSfx(sfxTone);
+    }
+  }
 };
 
 const formatCurrency = (value) => value.toLocaleString(undefined, { maximumFractionDigits: 0 });
@@ -2574,9 +2969,11 @@ const updateDesignerSummary = () => {
     machines.push("standard-kit");
   }
   const decorations = Array.from(designerState.decorations);
+  const activeLayout = getSizeOption(designerState.sizeId);
   const preview = summarizeRoomDesign({
     blueprint,
     sizeId: designerState.sizeId,
+    layoutOverride: activeLayout,
     interiorId: designerState.interiorId,
     machines,
     decorations,
@@ -2671,7 +3068,10 @@ const updateDesignerOptions = () => {
 
   const profile = blueprint.designProfile ?? defaultDesignProfile;
 
-  if (!profile.sizes.includes(designerState.sizeId)) {
+  if (
+    !profile.sizes.includes(designerState.sizeId) &&
+    !(typeof designerState.sizeId === "string" && designerState.sizeId.startsWith("custom-"))
+  ) {
     designerState.sizeId = profile.sizes[0];
   }
   size.innerHTML = "";
@@ -2682,6 +3082,13 @@ const updateDesignerOptions = () => {
     option.textContent = `${sizeOption.label} (¤${formatCurrency(Math.round(blueprint.cost * sizeOption.costMultiplier))})`;
     size.appendChild(option);
   });
+  if (typeof designerState.sizeId === "string" && designerState.sizeId.startsWith("custom-")) {
+    const customOption = document.createElement("option");
+    const layout = getSizeOption(designerState.sizeId);
+    customOption.value = designerState.sizeId;
+    customOption.textContent = `${layout.label} (¤${formatCurrency(Math.round(blueprint.cost * layout.costMultiplier))})`;
+    size.appendChild(customOption);
+  }
   size.value = designerState.sizeId;
 
   if (!profile.interiors.includes(designerState.interiorId)) {
@@ -3029,9 +3436,11 @@ const applyDesignToRoom = () => {
     machines.push("standard-kit");
   }
   const decorations = Array.from(designerState.decorations);
+  const layoutOverride = getSizeOption(designerState.sizeId);
   const preview = summarizeRoomDesign({
     blueprint,
     sizeId: designerState.sizeId,
+    layoutOverride,
     interiorId: designerState.interiorId,
     machines,
     decorations,
@@ -3111,6 +3520,10 @@ const setBuildMode = (active) => {
 
 const updateBuildGuidance = () => {
   if (!elements.buildHint) return;
+  if (buildPreviewState.active) {
+    updateBuildPreviewHint();
+    return;
+  }
   if (designerState.editingRoomId) {
     const room = getRoomById(designerState.editingRoomId);
     const blueprint = designerState.blueprint ?? (room ? getBlueprint(room.type) : null);
@@ -3128,8 +3541,8 @@ const updateBuildGuidance = () => {
   if (blueprint) {
     const size = getSizeOption(designerState.sizeId);
     const theme = getInteriorTheme(designerState.interiorId);
-    let hint = `Building: ${blueprint.name} – ${size.label}, ${theme.label}. Click the top-left tile to place it.`;
-    let footnote = `Layout covers ${size.width}×${size.height} tiles. Select the top-left plot or press Esc to cancel.`;
+    let hint = `Building: ${blueprint.name} – ${size.label}, ${theme.label}. Click and drag to shape the footprint.`;
+    let footnote = `Start at your desired corner, then drag to adjust the ${size.width}×${size.height} layout (or larger). Release to build or press Esc to cancel.`;
     if (!hasPlacementForSize(size.width, size.height)) {
       const availableParcel = state.properties.find((parcel) => !parcel.owned);
       const parcelPrompt = availableParcel
@@ -3151,6 +3564,7 @@ const updateBuildGuidance = () => {
 };
 
 const clearBuildSelection = () => {
+  resetBuildPreview();
   selectedRoom = null;
   designerState.editingRoomId = null;
   designerState.blueprint = null;
@@ -3203,7 +3617,10 @@ const setupGrid = () => {
         cell.dataset.parcelId = parcel.id;
         cell.dataset.parcelName = parcel.name;
       }
-      cell.addEventListener("click", () => handleBuildClick(x, y));
+      cell.addEventListener("pointerdown", (event) => handleGridPointerDown(event, x, y));
+      cell.addEventListener("pointerenter", () => handleGridPointerEnter(x, y));
+      cell.addEventListener("pointerup", (event) => handleGridPointerUp(event, x, y));
+      cell.addEventListener("click", (event) => handleGridCellClick(event, x, y));
       elements.grid.appendChild(cell);
     }
   }
@@ -3262,6 +3679,223 @@ const updateGrid = () => {
       cell.setAttribute("aria-label", `Plot ${coord} (empty)`);
     }
   });
+  updateGridPreviewHighlight();
+};
+
+const updateGridPreviewHighlight = () => {
+  if (!elements.grid) return;
+  const cells = elements.grid.querySelectorAll(".grid-cell");
+  cells.forEach((cell) => {
+    const tileX = Number(cell.dataset.x);
+    const tileY = Number(cell.dataset.y);
+    const inPreview =
+      buildPreviewState.active &&
+      tileX >= buildPreviewState.x &&
+      tileX < buildPreviewState.x + buildPreviewState.width &&
+      tileY >= buildPreviewState.y &&
+      tileY < buildPreviewState.y + buildPreviewState.height;
+    const isOrigin =
+      inPreview && tileX === buildPreviewState.x && tileY === buildPreviewState.y;
+    cell.classList.toggle("preview", inPreview);
+    cell.classList.toggle("preview-origin", isOrigin);
+    cell.classList.toggle("preview-invalid", inPreview && !buildPreviewState.valid);
+    if (!inPreview && !cell.dataset.label && cell.textContent) {
+      cell.textContent = "";
+    }
+    if (isOrigin && !cell.dataset.label) {
+      cell.textContent = `${buildPreviewState.width}×${buildPreviewState.height}`;
+    }
+    if (!inPreview && cell.classList.contains("preview")) {
+      cell.classList.remove("preview", "preview-origin", "preview-invalid");
+    }
+  });
+};
+
+const updateBuildPreviewHint = () => {
+  if (!elements.buildHint) return;
+  if (!buildPreviewState.active) {
+    return;
+  }
+  const blueprint = selectedRoom ?? designerState.blueprint;
+  const name = blueprint?.name ?? "room";
+  const dims = `${buildPreviewState.width}×${buildPreviewState.height}`;
+  const status = buildPreviewState.valid ? "Release to confirm." : "Space blocked.";
+  elements.buildHint.textContent = `Placing ${name}: ${dims}. ${status}`;
+  if (elements.blueprintFootnote) {
+    elements.blueprintFootnote.textContent = buildPreviewState.valid
+      ? `Drag to adjust the footprint. Release to build a ${dims} layout.`
+      : `Drag to adjust the footprint. Clear space to place a ${dims} layout.`;
+  }
+};
+
+const cancelBuildPreview = () => {
+  if (!buildPreviewState.active) return false;
+  const capture = buildPreviewState.captureElement;
+  const pointerId = buildPreviewState.pointerId;
+  if (capture && typeof capture.releasePointerCapture === "function" && pointerId !== null) {
+    try {
+      capture.releasePointerCapture(pointerId);
+    } catch (error) {
+      /* noop */
+    }
+  }
+  resetBuildPreview();
+  updateBuildGuidance();
+  return true;
+};
+
+const beginBuildPreview = (pointerId, x, y, target) => {
+  if (designerState.editingRoomId) {
+    logEvent("Apply or cancel the current room edit before placing new rooms.", "warning");
+    return false;
+  }
+  const blueprint = selectedRoom ?? designerState.blueprint;
+  if (!blueprint) {
+    return false;
+  }
+  buildPreviewState.active = true;
+  buildPreviewState.pointerId = pointerId;
+  buildPreviewState.captureElement = target ?? null;
+  buildPreviewState.startX = x;
+  buildPreviewState.startY = y;
+  buildPreviewState.x = x;
+  buildPreviewState.y = y;
+  buildPreviewState.width = 1;
+  buildPreviewState.height = 1;
+  buildPreviewState.valid = canPlaceFootprint(x, y, 1, 1);
+  updateGridPreviewHighlight();
+  updateBuildPreviewHint();
+  if (target && typeof target.setPointerCapture === "function" && pointerId !== null) {
+    try {
+      target.setPointerCapture(pointerId);
+    } catch (error) {
+      /* ignore pointer capture errors */
+    }
+  }
+  return true;
+};
+
+const updateBuildPreviewBounds = (x, y) => {
+  if (!buildPreviewState.active) return;
+  const clampedX = clamp(x, 0, GRID_WIDTH - 1);
+  const clampedY = clamp(y, 0, GRID_HEIGHT - 1);
+  const minX = Math.min(buildPreviewState.startX, clampedX);
+  const minY = Math.min(buildPreviewState.startY, clampedY);
+  const maxX = Math.max(buildPreviewState.startX, clampedX);
+  const maxY = Math.max(buildPreviewState.startY, clampedY);
+  const width = maxX - minX + 1;
+  const height = maxY - minY + 1;
+  buildPreviewState.x = minX;
+  buildPreviewState.y = minY;
+  buildPreviewState.width = width;
+  buildPreviewState.height = height;
+  buildPreviewState.valid = canPlaceFootprint(minX, minY, width, height);
+  updateGridPreviewHighlight();
+  updateBuildPreviewHint();
+};
+
+const finalizeBuildPreview = (commit = true) => {
+  if (!buildPreviewState.active) return;
+  const placement = {
+    x: buildPreviewState.x,
+    y: buildPreviewState.y,
+    width: buildPreviewState.width,
+    height: buildPreviewState.height,
+    valid: buildPreviewState.valid,
+    pointerId: buildPreviewState.pointerId,
+    capture: buildPreviewState.captureElement,
+  };
+  if (
+    placement.capture &&
+    typeof placement.capture.releasePointerCapture === "function" &&
+    placement.pointerId !== null
+  ) {
+    try {
+      placement.capture.releasePointerCapture(placement.pointerId);
+    } catch (error) {
+      /* ignore */
+    }
+  }
+  resetBuildPreview();
+  let placed = false;
+  if (commit && placement.valid) {
+    const layout = createCustomLayoutOption(placement.width, placement.height);
+    placed = placeRoomAt(placement.x, placement.y, layout, { fromDrag: true });
+  } else {
+    if (commit && !placement.valid) {
+      logEvent("That footprint overlaps restricted space. Adjust the drag to find a clear area.", "negative");
+    }
+    updateBuildGuidance();
+  }
+  if (placed) {
+    buildPreviewState.justPlaced = true;
+    window.setTimeout(() => {
+      buildPreviewState.justPlaced = false;
+    }, 0);
+  }
+};
+
+const handleGridPointerDown = (event, x, y) => {
+  if (event.button !== 0 && event.pointerType !== "touch") {
+    return;
+  }
+  const began = beginBuildPreview(event.pointerId ?? null, x, y, event.currentTarget);
+  if (began) {
+    event.preventDefault();
+  }
+};
+
+const handleGridPointerEnter = (x, y) => {
+  if (!buildPreviewState.active) return;
+  updateBuildPreviewBounds(x, y);
+};
+
+const handleGridPointerUp = (event, x, y) => {
+  if (!buildPreviewState.active) return;
+  updateBuildPreviewBounds(x, y);
+  finalizeBuildPreview(true);
+  event.preventDefault();
+};
+
+const handleGridPointerMove = (event) => {
+  if (!buildPreviewState.active || !elements.grid) return;
+  const rect = elements.grid.getBoundingClientRect();
+  if (!rect || rect.width === 0 || rect.height === 0) return;
+  const relX = event.clientX - rect.left;
+  const relY = event.clientY - rect.top;
+  if (relX < 0 || relY < 0 || relX > rect.width || relY > rect.height) {
+    return;
+  }
+  const gridX = clamp(Math.floor((relX / rect.width) * GRID_WIDTH), 0, GRID_WIDTH - 1);
+  const gridY = clamp(Math.floor((relY / rect.height) * GRID_HEIGHT), 0, GRID_HEIGHT - 1);
+  updateBuildPreviewBounds(gridX, gridY);
+};
+
+const handleGlobalPointerUp = (event) => {
+  if (!buildPreviewState.active) return;
+  if (buildPreviewState.pointerId === null || event.pointerId === buildPreviewState.pointerId) {
+    finalizeBuildPreview(true);
+  }
+};
+
+const handleGlobalPointerCancel = (event) => {
+  if (!buildPreviewState.active) return;
+  if (buildPreviewState.pointerId === null || event.pointerId === buildPreviewState.pointerId) {
+    cancelBuildPreview();
+  }
+};
+
+const handleGridCellClick = (event, x, y) => {
+  if (buildPreviewState.justPlaced) {
+    buildPreviewState.justPlaced = false;
+    event.preventDefault();
+    return;
+  }
+  if (event.detail === 0) {
+    handleBuildClick(x, y);
+  } else if (!buildPreviewState.active) {
+    handleBuildClick(x, y);
+  }
 };
 
 const setupCanvas = () => {
@@ -3293,6 +3927,95 @@ const setupCanvas = () => {
   updateShowcaseZoomIndicator();
 };
 
+const HUMAN_SKIN_TONES = ["#f1d4c1", "#e5b89a", "#cb916d", "#a76b47", "#7f4c2c", "#533321"];
+const HUMAN_HAIR_TONES = ["#2b1f19", "#3b2c1e", "#4f3824", "#6d4b2d", "#8a623a", "#b98a58", "#d8b591", "#1f2937"];
+const HUMAN_BASE_BODY_HEIGHT = 18;
+const HUMAN_BASE_BODY_WIDTH = 10;
+
+const deriveAvatarPalette = (seed, baseColor) => {
+  const skin = HUMAN_SKIN_TONES[seed % HUMAN_SKIN_TONES.length];
+  const hair = HUMAN_HAIR_TONES[(seed >> 3) % HUMAN_HAIR_TONES.length];
+  const toneShift = ((seed % 7) - 3) * 0.04;
+  const outfit = shiftColor(baseColor, toneShift);
+  const shadow = shiftColor(outfit, -0.45);
+  const accent = shiftColor(outfit, 0.35);
+  return { skin, hair, outfit, accent, shadow };
+};
+
+const drawHumanFigure = (ctx, palette, { scale = 1 } = {}) => {
+  const bodyHeight = HUMAN_BASE_BODY_HEIGHT * scale;
+  const bodyWidth = HUMAN_BASE_BODY_WIDTH * scale;
+  const headRadius = 4 * scale;
+  ctx.save();
+  ctx.fillStyle = withAlpha(palette.shadow, 0.45);
+  ctx.beginPath();
+  ctx.ellipse(0, 3 * scale, bodyWidth * 0.6, 2.8 * scale, 0, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.translate(0, -bodyHeight);
+  ctx.fillStyle = shiftColor(palette.outfit, -0.18);
+  drawRoundedRect(ctx, -bodyWidth / 2 - 2.2 * scale, bodyHeight * 0.55, bodyWidth + 4.4 * scale, bodyHeight * 0.25, 5 * scale);
+  ctx.fill();
+  const torsoGradient = ctx.createLinearGradient(0, 0, 0, bodyHeight);
+  torsoGradient.addColorStop(0, shiftColor(palette.outfit, 0.22));
+  torsoGradient.addColorStop(1, shiftColor(palette.outfit, -0.2));
+  ctx.fillStyle = torsoGradient;
+  drawRoundedRect(ctx, -bodyWidth / 2, 0, bodyWidth, bodyHeight, 4 * scale);
+  ctx.fill();
+  ctx.fillStyle = palette.accent;
+  drawRoundedRect(ctx, -bodyWidth * 0.25, bodyHeight * 0.32, bodyWidth * 0.5, bodyHeight * 0.22, 2.5 * scale);
+  ctx.fill();
+  ctx.fillStyle = palette.skin;
+  ctx.beginPath();
+  ctx.arc(0, -headRadius * 0.6, headRadius, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.fillStyle = palette.hair;
+  ctx.beginPath();
+  ctx.arc(0, -headRadius * 0.9, headRadius * 1.2, Math.PI * 1.1, Math.PI * 1.9);
+  ctx.lineTo(0, -headRadius * 0.6);
+  ctx.closePath();
+  ctx.fill();
+  ctx.restore();
+};
+
+const drawMiniAvatar = (ctx, palette, { emergency = false } = {}) => {
+  const scale = 0.65;
+  const bodyWidth = HUMAN_BASE_BODY_WIDTH * scale;
+  ctx.save();
+  ctx.translate(0, -6);
+  drawHumanFigure(ctx, palette, { scale });
+  ctx.restore();
+  if (emergency) {
+    ctx.save();
+    ctx.translate(bodyWidth * 0.55, -18);
+    ctx.fillStyle = "rgba(239, 68, 68, 0.92)";
+    ctx.beginPath();
+    ctx.arc(0, 0, 4, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.strokeStyle = "rgba(248, 250, 252, 0.95)";
+    ctx.lineWidth = 1.2;
+    ctx.beginPath();
+    ctx.moveTo(-1.8, 0);
+    ctx.lineTo(1.8, 0);
+    ctx.moveTo(0, -1.8);
+    ctx.lineTo(0, 1.8);
+    ctx.stroke();
+    ctx.restore();
+  }
+};
+
+const getPatientAvatarPalette = (patient) => {
+  const baseColor = patient.profile?.color ?? "#38bdf8";
+  const seed = hashString(`${patient.id}-${patient.name}-${patient.profile?.id ?? ""}`);
+  return deriveAvatarPalette(seed, baseColor);
+};
+
+const getStaffAvatarPalette = (agent) => {
+  const baseColor = STAFF_ROLE_COLORS[agent.staff?.role] ?? "#94a3b8";
+  const identifier = `${agent.staff?.id ?? agent.id}-${agent.staff?.name ?? ""}`;
+  const seed = hashString(identifier);
+  return deriveAvatarPalette(seed, baseColor);
+};
+
 const drawPatientQueue = (ctx) => {
   const baseY = GRID_HEIGHT * CANVAS_CELL - 26;
   const startX = 36;
@@ -3308,24 +4031,22 @@ const drawPatientQueue = (ctx) => {
   ctx.fillText("Patient Queue", startX - 12, baseY - 18);
   state.queue.slice(0, 10).forEach((patient, index) => {
     const px = startX + index * 44;
-    const gradient = ctx.createRadialGradient(px - 2, baseY - 4, 4, px, baseY, 18);
-    gradient.addColorStop(0, withAlpha(patient.profile.color, 0.95));
-    gradient.addColorStop(1, withAlpha(shiftColor(patient.profile.color, -0.35), 0.85));
-    ctx.fillStyle = "rgba(15, 23, 42, 0.9)";
+    const palette = getPatientAvatarPalette(patient);
+    ctx.save();
     drawRoundedRect(ctx, px - 18, baseY - 18, 36, 36, 14);
+    ctx.fillStyle = "rgba(15, 23, 42, 0.82)";
     ctx.fill();
-    ctx.fillStyle = gradient;
+    const frameGradient = ctx.createLinearGradient(px - 16, baseY - 16, px + 16, baseY + 16);
+    frameGradient.addColorStop(0, withAlpha(palette.outfit, 0.25));
+    frameGradient.addColorStop(1, withAlpha(palette.accent, 0.2));
+    ctx.fillStyle = frameGradient;
     drawRoundedRect(ctx, px - 14, baseY - 14, 28, 28, 12);
     ctx.fill();
-    if (patient.isEmergency) {
-      ctx.strokeStyle = "rgba(239, 68, 68, 0.9)";
-      ctx.lineWidth = 2;
-      ctx.stroke();
-    }
-    ctx.fillStyle = "rgba(15, 23, 42, 0.82)";
-    ctx.font = "11px 'Segoe UI', sans-serif";
-    ctx.textAlign = "center";
-    ctx.fillText(patient.name.charAt(0), px, baseY + 4);
+    ctx.save();
+    ctx.translate(px, baseY + 6);
+    drawMiniAvatar(ctx, palette, { emergency: patient.isEmergency });
+    ctx.restore();
+    ctx.restore();
   });
   ctx.restore();
 };
@@ -3358,18 +4079,20 @@ const drawPatientAgentsBlueprint = (ctx) => {
     ctx.save();
     ctx.translate(px, py);
     drawMoodGlow(ctx, patient.mood ?? patient.status);
-    ctx.fillStyle = withAlpha(patient.profile.color ?? "#38bdf8", 0.95);
-    ctx.beginPath();
-    ctx.arc(0, 0, 9, 0, Math.PI * 2);
-    ctx.fill();
-    ctx.fillStyle = "rgba(15, 23, 42, 0.85)";
-    ctx.font = "10px 'Segoe UI', sans-serif";
-    ctx.textAlign = "center";
-    ctx.textBaseline = "middle";
-    ctx.fillText(patient.name.charAt(0), 0, 1);
+    const palette = getPatientAvatarPalette(patient);
+    drawHumanFigure(ctx, palette, { scale: 0.85 });
     if (patient.isEmergency) {
-      ctx.strokeStyle = "rgba(239, 68, 68, 0.9)";
-      ctx.lineWidth = 2;
+      ctx.fillStyle = "rgba(239, 68, 68, 0.92)";
+      ctx.beginPath();
+      ctx.arc(6, -18, 4, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.strokeStyle = "rgba(248, 250, 252, 0.95)";
+      ctx.lineWidth = 1.2;
+      ctx.beginPath();
+      ctx.moveTo(4.2, -18);
+      ctx.lineTo(7.8, -18);
+      ctx.moveTo(6, -20.2);
+      ctx.lineTo(6, -15.8);
       ctx.stroke();
     }
     ctx.restore();
@@ -3386,21 +4109,13 @@ const drawStaffAgentsBlueprint = (ctx) => {
     const py = agent.position.y * CANVAS_CELL;
     ctx.save();
     ctx.translate(px, py);
-    const color = STAFF_ROLE_COLORS[agent.staff?.role] ?? "#f8fafc";
-    const gradient = ctx.createRadialGradient(0, 0, 2, 0, 0, 12);
-    gradient.addColorStop(0, withAlpha(color, 0.9));
-    gradient.addColorStop(1, withAlpha(shiftColor(color, -0.35), 0.6));
-    ctx.fillStyle = "rgba(15, 23, 42, 0.85)";
-    ctx.beginPath();
-    ctx.arc(0, 0, 7, 0, Math.PI * 2);
-    ctx.fill();
-    ctx.fillStyle = gradient;
-    ctx.beginPath();
-    ctx.arc(0, 0, 6, 0, Math.PI * 2);
-    ctx.fill();
-    ctx.strokeStyle = "rgba(15, 23, 42, 0.6)";
-    ctx.lineWidth = 1;
-    ctx.stroke();
+    const palette = getStaffAvatarPalette(agent);
+    drawHumanFigure(ctx, palette, { scale: 0.75 });
+    ctx.fillStyle = withAlpha(palette.accent, 0.8);
+    ctx.font = "700 9px 'Segoe UI', sans-serif";
+    ctx.textAlign = "center";
+    ctx.textBaseline = "middle";
+    ctx.fillText((agent.staff?.role ?? "").charAt(0).toUpperCase(), 0, -22);
     ctx.restore();
   });
   ctx.restore();
@@ -5989,14 +6704,9 @@ const hireStaff = (candidateId) => {
   updateStats();
 };
 
-const handleBuildClick = (x, y) => {
-  if (designerState.editingRoomId) {
-    logEvent("Apply or cancel the current room edit before placing new rooms.", "warning");
-    return;
-  }
+const placeRoomAt = (x, y, layout, { fromDrag = false } = {}) => {
   const blueprint = selectedRoom ?? designerState.blueprint;
-  if (!blueprint) return;
-  const size = getSizeOption(designerState.sizeId);
+  if (!blueprint) return false;
   const coordLabel = `${AXIS_LETTERS[x] ?? x + 1}${y + 1}`;
   if (!isTileUnlocked(x, y)) {
     const parcel = getParcelAt(x, y);
@@ -6008,11 +6718,14 @@ const handleBuildClick = (x, y) => {
     } else {
       logEvent(`That area of the campus isn't zoned for construction yet.`, "warning");
     }
-    return;
+    updateBuildGuidance();
+    return false;
   }
-  if (!canPlaceFootprint(x, y, size.width, size.height)) {
+  const footprint = layout ?? getSizeOption(designerState.sizeId);
+  if (!canPlaceFootprint(x, y, footprint.width, footprint.height)) {
     logEvent(`Not enough free space to place ${blueprint.name} at plot ${coordLabel}.`, "negative");
-    return;
+    updateBuildGuidance();
+    return false;
   }
   const machines = Array.from(designerState.machines);
   if (!machines.length) {
@@ -6021,7 +6734,8 @@ const handleBuildClick = (x, y) => {
   const decorations = Array.from(designerState.decorations);
   const preview = summarizeRoomDesign({
     blueprint,
-    sizeId: designerState.sizeId,
+    sizeId: footprint.id ?? designerState.sizeId,
+    layoutOverride: footprint,
     interiorId: designerState.interiorId,
     machines,
     decorations,
@@ -6031,7 +6745,8 @@ const handleBuildClick = (x, y) => {
       `Not enough cash to build ${blueprint.name} with the selected upgrades (requires ¤${formatCurrency(preview.totalCost)}).`,
       "negative"
     );
-    return;
+    updateBuildGuidance();
+    return false;
   }
 
   const room = {
@@ -6049,10 +6764,10 @@ const handleBuildClick = (x, y) => {
     severityBoost: preview.severityBoost,
     decorations: [...decorations],
     machines: [...machines],
-    sizeId: size.id,
+    sizeId: footprint.id ?? designerState.sizeId,
     interiorId: designerState.interiorId,
-    width: size.width,
-    height: size.height,
+    width: footprint.width,
+    height: footprint.height,
     x,
     y,
     severityCapacity: Math.max(0, Math.round((blueprint.baseSeverity ?? 0) + preview.severityBoost)),
@@ -6067,6 +6782,7 @@ const handleBuildClick = (x, y) => {
     0,
     100
   );
+  designerState.sizeId = room.sizeId;
   recalculateAmbience();
   renderRoomManagement();
   updateGrid();
@@ -6074,14 +6790,34 @@ const handleBuildClick = (x, y) => {
   updateQueue();
   updateStats();
   evaluateObjectives();
+  updateDesignerSummary();
   updateBuildGuidance();
   logEvent(
-    `${blueprint.name} constructed at ${coordLabel} for ¤${formatCurrency(preview.totalCost)} with ${machines.length} machines and ${decorations.length} decor upgrades.`,
+    `${blueprint.name} constructed at ${coordLabel} (${footprint.width}×${footprint.height}) for ¤${formatCurrency(
+      preview.totalCost
+    )} with ${machines.length} machines and ${decorations.length} decor upgrades.`,
     "positive"
   );
   if (elements.blueprintFootnote) {
-    elements.blueprintFootnote.textContent = `${blueprint.name} placed at plot ${coordLabel}. Click another top-left tile or press Esc to cancel.`;
+    const followUp = fromDrag
+      ? "Drag another footprint or press Esc to cancel."
+      : "Click another starting tile or press Esc to cancel.";
+    elements.blueprintFootnote.textContent = `${blueprint.name} placed at plot ${coordLabel} covering ${
+      footprint.width
+    }×${footprint.height}. ${followUp}`;
   }
+  return true;
+};
+
+const handleBuildClick = (x, y) => {
+  if (designerState.editingRoomId) {
+    logEvent("Apply or cancel the current room edit before placing new rooms.", "warning");
+    return;
+  }
+  if (buildPreviewState.active) {
+    return;
+  }
+  placeRoomAt(x, y, getSizeOption(designerState.sizeId));
 };
 
 const investResearch = (projectId) => {
@@ -6976,6 +7712,7 @@ const init = () => {
   renderPropertyMarket();
   setupTabs();
   setupMenuRail();
+  setupAudioControls();
   refreshCandidates();
   renderCandidates();
   renderRoster();
@@ -7007,9 +7744,16 @@ const init = () => {
         closeSaveMenu();
         return;
       }
+      if (cancelBuildPreview()) {
+        event.preventDefault();
+        return;
+      }
       clearBuildSelection();
     }
   });
+  window.addEventListener("pointermove", handleGridPointerMove);
+  window.addEventListener("pointerup", handleGlobalPointerUp);
+  window.addEventListener("pointercancel", handleGlobalPointerCancel);
   window.addEventListener("resize", () => {
     setupCanvas();
     renderHospitalCanvas();
