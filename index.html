@@ -145,28 +145,14 @@
 
       <section class="sidebar tab-content" aria-label="Game controls">
         <section id="tab-overview" class="tab-panel active" role="tabpanel">
-          <h2>Hospital Overview</h2>
-          <p>Balance your hospital's prestige, finance, and patient care. Keep staff happy and the wards running smoothly.</p>
-          <div class="meter">
-            <label for="meter-cleanliness">Cleanliness</label>
-            <progress id="meter-cleanliness" value="80" max="100"></progress>
+          <div class="overview-note">
+            <h2>Hospital Pulse on the operations rail</h2>
+            <p>
+              Keep the live campus front and center—the quick stats now sit to the right so you can monitor
+              cleanliness, morale, and grounds without shrinking the view.
+            </p>
           </div>
-          <div class="meter">
-            <label for="meter-efficiency">Efficiency</label>
-            <progress id="meter-efficiency" value="65" max="100"></progress>
-          </div>
-          <div class="meter">
-            <label for="meter-morale">Staff Morale</label>
-            <progress id="meter-morale" value="70" max="100"></progress>
-          </div>
-          <div class="meter">
-            <label for="meter-grounds">Grounds Care</label>
-            <progress id="meter-grounds" value="72" max="100"></progress>
-          </div>
-          <div class="meter">
-            <label for="meter-plants">Plant Health</label>
-            <progress id="meter-plants" value="78" max="100"></progress>
-          </div>
+          <div class="overview-divider" aria-hidden="true"></div>
           <div class="policies" id="panel-policies">
             <h3>Hospital Policies</h3>
             <label>
@@ -220,6 +206,15 @@
               <button
                 type="button"
                 class="build-menu__tab"
+                data-build-tab="structure"
+                role="tab"
+                aria-selected="false"
+              >
+                Structure
+              </button>
+              <button
+                type="button"
+                class="build-menu__tab"
                 data-build-tab="interiors"
                 role="tab"
                 aria-selected="false"
@@ -237,6 +232,7 @@
               </button>
             </div>
             <div class="build-menu__panel active" id="build-menu-rooms" role="tabpanel"></div>
+            <div class="build-menu__panel" id="build-menu-structure" role="tabpanel" aria-hidden="true"></div>
             <div class="build-menu__panel" id="build-menu-interiors" role="tabpanel" aria-hidden="true"></div>
             <div class="build-menu__panel" id="build-menu-amenities" role="tabpanel" aria-hidden="true"></div>
           </div>
@@ -266,7 +262,7 @@
             <p class="built-rooms-intro">Select an existing room to resize it, swap interiors, or add new equipment and decor.</p>
             <ul id="built-rooms" class="built-room-list"></ul>
           </section>
-          <div class="build-hint" id="build-hint">Click on the hospital grid to place a room.</div>
+          <div class="build-hint" id="build-hint">Select a room blueprint, then drag directly on the hospital floor to place it.</div>
         </section>
 
         <section id="tab-staff" class="tab-panel" role="tabpanel">
@@ -295,48 +291,19 @@
       </section>
 
       <section class="playfield" aria-label="Hospital layout">
-        <div class="blueprint-wrapper" aria-label="Construction blueprint">
-          <header class="blueprint-header">
-            <div class="blueprint-header__row">
-              <h2>Pulse Point Live Hospital</h2>
-              <div class="blueprint-header__actions">
-                <button class="blueprint-info-button" type="button" id="open-lot-overview">
-                  Lot overview &amp; tips
-                </button>
-                <div class="view-switcher" role="radiogroup" aria-label="Hospital view">
-                  <button class="view-switcher__button" type="button" data-view-mode="blueprint" aria-pressed="false">
-                    Blueprint
-                  </button>
-                  <button
-                    class="view-switcher__button active"
-                    type="button"
-                    data-view-mode="showcase"
-                    aria-pressed="true"
-                  >
-                    Live Hospital
-                  </button>
-                </div>
+        <div id="live-build-overlay" class="live-build-overlay" aria-live="polite">
+          <div class="live-build-status">
+            <div class="live-build-status__row">
+              <div id="live-build-hint" class="live-build-hint">
+              Select a room blueprint, then drag on the hospital floor to draw it to size.
               </div>
+              <button class="live-build-lots" type="button" id="open-lot-overview">Lot overview &amp; tips</button>
             </div>
-            <div class="blueprint-legend" aria-hidden="true">
-              <span><span class="legend-swatch empty"></span> Empty plot</span>
-              <span><span class="legend-swatch buildable"></span> Build target</span>
-              <span><span class="legend-swatch occupied"></span> Built room</span>
-              <span><span class="legend-swatch locked"></span> Locked parcel</span>
-            </div>
-          </header>
-          <div class="blueprint-gridwrap">
-            <div id="axis-x" class="axis axis-x" aria-hidden="true"></div>
-            <div id="axis-y" class="axis axis-y" aria-hidden="true"></div>
-            <div class="grid-stage">
-              <div class="grid-backdrop" aria-hidden="true"></div>
-              <div id="grid" class="grid" role="grid" aria-label="Hospital floor plan"></div>
+            <div id="live-build-footnote" class="live-build-footnote">
+              All construction now happens directly in the live hospital view—hold and drag like Theme Hospital to set the footprint.
             </div>
           </div>
-          <div id="blueprint-footnote" class="blueprint-footnote">
-            Pick a room on the Build tab to start construction. Expand the campus by purchasing parcels in Hospital
-            Grounds.
-          </div>
+          <div id="live-build-rooms" class="live-build-palette" role="radiogroup" aria-label="Room blueprints"></div>
         </div>
         <canvas
           id="hospital-canvas"
@@ -344,6 +311,69 @@
           height="448"
           aria-label="Hospital rendered floorplan"
         ></canvas>
+        <aside id="patient-detail" class="patient-detail" aria-live="polite" hidden>
+          <header class="patient-detail__header">
+            <div>
+              <h3 id="patient-detail-name">Patient name</h3>
+              <p id="patient-detail-status" class="patient-detail__status">Waiting in queue</p>
+            </div>
+            <div class="patient-detail__profile">
+              <span id="patient-detail-profile" class="patient-profile-badge">Profile</span>
+              <button type="button" id="patient-detail-close" class="patient-detail__close" aria-label="Close patient card">
+                ×
+              </button>
+            </div>
+          </header>
+          <dl class="patient-detail__stats">
+            <div>
+              <dt>Mood</dt>
+              <dd id="patient-detail-mood">Calm</dd>
+            </div>
+            <div>
+              <dt>Health</dt>
+              <dd>
+                <div class="patient-detail__meter">
+                  <progress id="patient-detail-health" max="100" value="70"></progress>
+                  <span id="patient-detail-health-value">70%</span>
+                </div>
+              </dd>
+            </div>
+            <div>
+              <dt>Diagnosis</dt>
+              <dd>
+                <div class="patient-detail__meter">
+                  <progress id="patient-detail-diagnosis" max="100" value="45"></progress>
+                  <span id="patient-detail-diagnosis-value">45%</span>
+                </div>
+              </dd>
+            </div>
+            <div>
+              <dt>Patience</dt>
+              <dd>
+                <div class="patient-detail__meter">
+                  <progress id="patient-detail-patience" max="180" value="90"></progress>
+                  <span id="patient-detail-patience-value">90</span>
+                </div>
+              </dd>
+            </div>
+          </dl>
+          <section class="patient-detail__section">
+            <h4>Current Concern</h4>
+            <p id="patient-detail-ailment">Ailment description</p>
+            <p id="patient-detail-queue" class="patient-detail__queue">Queue position</p>
+          </section>
+          <section class="patient-detail__section">
+            <h4>Recent Cures</h4>
+            <ul id="patient-detail-cures" class="patient-detail__cures"></ul>
+            <p id="patient-detail-cures-empty" class="patient-detail__empty" hidden>
+              No treatments recorded yet.
+            </p>
+          </section>
+          <section class="patient-detail__section">
+            <h4>Notes</h4>
+            <p id="patient-detail-notes">Patients explore the lobby while they wait.</p>
+          </section>
+        </aside>
         <div class="hospital-zoom-controls" id="hospital-zoom-controls" hidden aria-live="polite">
           <span id="hospital-zoom-indicator">100%</span>
           <button type="button" id="reset-hospital-zoom" class="hospital-zoom-reset">Reset view</button>
@@ -352,6 +382,43 @@
       </section>
 
       <aside class="sidebar secondary" aria-label="Operations">
+        <section class="hospital-pulse-panel" aria-label="Hospital pulse">
+          <div class="hospital-pulse-panel__header">
+            <div>
+              <h2>Hospital Pulse</h2>
+              <p>Live vitals update as patients and staff flow through the campus.</p>
+            </div>
+            <button
+              type="button"
+              id="open-hospital-overview"
+              class="hospital-pulse-panel__button overview-dashboard-button"
+            >
+              Open dashboard
+            </button>
+          </div>
+          <div class="hospital-pulse-grid overview-mini-grid" role="list">
+            <article class="overview-mini-card" role="listitem">
+              <h3>Cleanliness</h3>
+              <p><span id="overview-cleanliness">80%</span></p>
+            </article>
+            <article class="overview-mini-card" role="listitem">
+              <h3>Efficiency</h3>
+              <p><span id="overview-efficiency">65%</span></p>
+            </article>
+            <article class="overview-mini-card" role="listitem">
+              <h3>Staff Morale</h3>
+              <p><span id="overview-morale">70%</span></p>
+            </article>
+            <article class="overview-mini-card" role="listitem">
+              <h3>Grounds Care</h3>
+              <p><span id="overview-grounds">72%</span></p>
+            </article>
+            <article class="overview-mini-card" role="listitem">
+              <h3>Plant Health</h3>
+              <p><span id="overview-plants">78%</span></p>
+            </article>
+          </div>
+        </section>
         <section>
           <h2>Patient Queue</h2>
           <ul id="patient-queue" class="queue-list"></ul>
@@ -447,6 +514,49 @@
       </div>
       <footer class="info-menu__footer">
         <button type="button" class="info-menu__close" data-close-lot-overview>Close</button>
+      </footer>
+    </section>
+  </div>
+
+  <div id="hospital-overview-menu" class="info-menu" aria-hidden="true">
+    <div class="info-menu__backdrop" data-close-hospital-overview></div>
+    <section
+      class="info-menu__panel"
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="hospital-overview-title"
+    >
+      <header class="info-menu__header">
+        <h2 id="hospital-overview-title" tabindex="-1">Hospital dashboard</h2>
+        <p>Compare vitals, track patient flow, and keep the grounds in Theme Hospital style.</p>
+      </header>
+      <div class="info-menu__body">
+        <div class="overview-meter-grid">
+          <div class="meter">
+            <label for="meter-cleanliness">Cleanliness</label>
+            <progress id="meter-cleanliness" value="80" max="100"></progress>
+          </div>
+          <div class="meter">
+            <label for="meter-efficiency">Efficiency</label>
+            <progress id="meter-efficiency" value="65" max="100"></progress>
+          </div>
+          <div class="meter">
+            <label for="meter-morale">Staff Morale</label>
+            <progress id="meter-morale" value="70" max="100"></progress>
+          </div>
+          <div class="meter">
+            <label for="meter-grounds">Grounds Care</label>
+            <progress id="meter-grounds" value="72" max="100"></progress>
+          </div>
+          <div class="meter">
+            <label for="meter-plants">Plant Health</label>
+            <progress id="meter-plants" value="78" max="100"></progress>
+          </div>
+        </div>
+        <ul id="hospital-overview-metrics" class="overview-metric-list"></ul>
+      </div>
+      <footer class="info-menu__footer">
+        <button type="button" class="info-menu__close" data-close-hospital-overview>Close</button>
       </footer>
     </section>
   </div>

@@ -55,6 +55,7 @@ import {
   hexToRgb,
   withAlpha,
 } from "./js/utils/helpers.js";
+import { createRenderEngine } from "./js/graphics/renderEngine.js";
 
 const showcaseAnimation = {
   time: 0,
@@ -157,18 +158,22 @@ const state = {
 const elements = {
   grid: document.querySelector("#grid"),
   hospitalCanvas: document.querySelector("#hospital-canvas"),
-  axisX: document.querySelector("#axis-x"),
-  axisY: document.querySelector("#axis-y"),
   buildOptions: document.querySelector("#build-options"),
   buildMenu: document.querySelector("#build-menu"),
   buildMenuTabs: Array.from(document.querySelectorAll("[data-build-tab]")),
   buildMenuPanels: {
     rooms: document.querySelector("#build-menu-rooms"),
+    structure: document.querySelector("#build-menu-structure"),
     interiors: document.querySelector("#build-menu-interiors"),
     amenities: document.querySelector("#build-menu-amenities"),
   },
-  buildHint: document.querySelector("#build-hint"),
-  blueprintFootnote: document.querySelector("#blueprint-footnote"),
+  buildHint: document.querySelector("#live-build-hint"),
+  liveBuild: {
+    overlay: document.querySelector("#live-build-overlay"),
+    hint: document.querySelector("#live-build-hint"),
+    footnote: document.querySelector("#live-build-footnote"),
+    palette: document.querySelector("#live-build-rooms"),
+  },
   property: {
     market: document.querySelector("#property-market"),
     owned: document.querySelector("#property-owned"),
@@ -177,6 +182,11 @@ const elements = {
     openButton: document.querySelector("#open-lot-overview"),
     modal: document.querySelector("#lot-overview-menu"),
     list: document.querySelector("#lot-overview-list"),
+  },
+  hospitalOverview: {
+    openButton: document.querySelector("#open-hospital-overview"),
+    modal: document.querySelector("#hospital-overview-menu"),
+    metrics: document.querySelector("#hospital-overview-metrics"),
   },
   zoom: {
     container: document.querySelector("#hospital-zoom-controls"),
@@ -191,6 +201,13 @@ const elements = {
   statEnvironment: document.querySelector("#stat-environment"),
   statWelfare: document.querySelector("#stat-welfare"),
   patientQueue: document.querySelector("#patient-queue"),
+  overviewSummary: {
+    cleanliness: document.querySelector("#overview-cleanliness"),
+    efficiency: document.querySelector("#overview-efficiency"),
+    morale: document.querySelector("#overview-morale"),
+    grounds: document.querySelector("#overview-grounds"),
+    plant: document.querySelector("#overview-plants"),
+  },
   eventLog: document.querySelector("#event-log"),
   staffCandidates: document.querySelector("#staff-candidates"),
   staffRoster: document.querySelector("#staff-roster"),
@@ -225,6 +242,25 @@ const elements = {
   },
   builtRooms: document.querySelector("#built-rooms"),
   viewButtons: Array.from(document.querySelectorAll("[data-view-mode]")),
+  patientDetail: {
+    panel: document.querySelector("#patient-detail"),
+    name: document.querySelector("#patient-detail-name"),
+    status: document.querySelector("#patient-detail-status"),
+    mood: document.querySelector("#patient-detail-mood"),
+    profile: document.querySelector("#patient-detail-profile"),
+    healthBar: document.querySelector("#patient-detail-health"),
+    healthValue: document.querySelector("#patient-detail-health-value"),
+    diagnosisBar: document.querySelector("#patient-detail-diagnosis"),
+    diagnosisValue: document.querySelector("#patient-detail-diagnosis-value"),
+    patienceBar: document.querySelector("#patient-detail-patience"),
+    patienceValue: document.querySelector("#patient-detail-patience-value"),
+    ailment: document.querySelector("#patient-detail-ailment"),
+    queue: document.querySelector("#patient-detail-queue"),
+    cures: document.querySelector("#patient-detail-cures"),
+    curesEmpty: document.querySelector("#patient-detail-cures-empty"),
+    notes: document.querySelector("#patient-detail-notes"),
+    close: document.querySelector("#patient-detail-close"),
+  },
   save: {
     modal: document.querySelector("#save-modal"),
     slotList: document.querySelector("#save-slot-list"),
@@ -241,6 +277,8 @@ const menuOptions = Array.from(
   document.querySelectorAll(".menu-option:not([data-modal]):not([data-audio-toggle])")
 );
 
+const renderEngine = createRenderEngine({ tileSize: CANVAS_CELL });
+
 let selectedRoom = null;
 let patientIdCounter = 1;
 let roomIdCounter = 1;
@@ -249,7 +287,7 @@ let hospitalCtx = null;
 let blueprintBuffer = null;
 let emptyTileSprite = null;
 let lockedTileSprite = null;
-const themedTileCache = new Map();
+let isoMapperCache = null;
 let viewMode = "showcase";
 let showcaseZoom = 1;
 let showcasePanX = 0;
@@ -259,6 +297,8 @@ let showcasePanPointerId = null;
 let showcasePanLastPoint = null;
 let lastFocusedBeforeSaveMenu = null;
 let lastFocusedBeforeLotOverview = null;
+let lastFocusedBeforeHospitalOverview = null;
+let selectedPatientId = null;
 let audioSettings = { ...DEFAULT_AUDIO_SETTINGS };
 let audioContextInstance = null;
 let musicGainNode = null;
@@ -272,7 +312,8 @@ const invalidateCanvasCache = () => {
   blueprintBuffer = null;
   emptyTileSprite = null;
   lockedTileSprite = null;
-  themedTileCache.clear();
+  isoMapperCache = null;
+  renderEngine.invalidate();
 };
 
 const loadAudioSettings = () => {
@@ -606,6 +647,181 @@ const adjustShowcaseZoom = (factor, options = {}) => {
   setShowcaseZoom(showcaseZoom * factor, options);
 };
 
+const isBuildSelectionActive = () => Boolean(selectedRoom ?? designerState.blueprint);
+
+const getShowcaseWorldPoint = (offsetX, offsetY, rect) => {
+  const width = GRID_WIDTH * CANVAS_CELL;
+  const height = GRID_HEIGHT * CANVAS_CELL;
+  const canvasX = rect.width ? (offsetX / rect.width) * width : offsetX;
+  const canvasY = rect.height ? (offsetY / rect.height) * height : offsetY;
+  const centerX = width / 2;
+  const centerY = height / 2;
+  return {
+    x: (canvasX - centerX) / showcaseZoom + centerX - showcasePanX,
+    y: (canvasY - centerY) / showcaseZoom + centerY - showcasePanY,
+  };
+};
+
+const getShowcaseTileFromOffset = (offsetX, offsetY, rect) => {
+  if (!rect) return null;
+  if (offsetX < 0 || offsetY < 0 || offsetX > rect.width || offsetY > rect.height) {
+    return null;
+  }
+  const world = getShowcaseWorldPoint(offsetX, offsetY, rect);
+  const mapper = getIsoMapper();
+  const { x, y } = mapper.unproject(world.x, world.y);
+  const tileX = Math.floor(x);
+  const tileY = Math.floor(y);
+  if (tileX < 0 || tileY < 0 || tileX >= GRID_WIDTH || tileY >= GRID_HEIGHT) {
+    return null;
+  }
+  return { x: tileX, y: tileY };
+};
+
+const getShowcaseTileFromEvent = (event) => {
+  const canvas = event.currentTarget || elements.hospitalCanvas;
+  if (!canvas) return null;
+  const rect = canvas.getBoundingClientRect();
+  const offsetX = event.clientX - rect.left;
+  const offsetY = event.clientY - rect.top;
+  return getShowcaseTileFromOffset(offsetX, offsetY, rect);
+};
+
+const findPatientNearTile = (tile) => {
+  if (!tile) return null;
+  const center = { x: tile.x + 0.5, y: tile.y + 0.5 };
+  let closest = null;
+  let bestDistance = Infinity;
+  state.patientsOnSite.forEach((patient) => {
+    if (!patient.position) return;
+    const distance = distanceBetween(center, patient.position);
+    if (distance < bestDistance && distance <= 1.1) {
+      closest = patient;
+      bestDistance = distance;
+    }
+  });
+  return closest;
+};
+
+const handleCanvasClick = (event) => {
+  if (viewMode !== "showcase") return;
+  if (isShowcasePanning || buildPreviewState.active) return;
+  const tile = getShowcaseTileFromEvent(event);
+  const patient = findPatientNearTile(tile);
+  if (patient) {
+    setSelectedPatient(patient);
+  } else {
+    clearSelectedPatient();
+  }
+};
+
+const resolveDoorPlacement = (room, x, y) => {
+  if (!room) return null;
+  const frontY = room.y + room.height;
+  if (y === frontY || y === frontY - 1) {
+    const index = clamp(x - room.x, 0, Math.max(0, room.width - 1));
+    return { wall: "south", index };
+  }
+  return null;
+};
+
+const resolveWindowPlacement = (room, x, y) => {
+  if (!room) return null;
+  const westX = room.x;
+  const eastX = room.x + room.width - 1;
+  if (x === westX || x === westX - 1) {
+    const index = clamp(y - room.y, 0, Math.max(0, room.height - 1));
+    return { wall: "west", index };
+  }
+  if (x === eastX || x === eastX + 1) {
+    const index = clamp(y - room.y, 0, Math.max(0, room.height - 1));
+    return { wall: "east", index };
+  }
+  const northY = room.y;
+  if (y === northY || y === northY - 1) {
+    const index = clamp(x - room.x, 0, Math.max(0, room.width - 1));
+    return { wall: "north", index };
+  }
+  return null;
+};
+
+const placeDoorAt = (room, x, y) => {
+  const placement = resolveDoorPlacement(room, x, y);
+  if (!placement) {
+    if (elements.liveBuild?.footnote) {
+      elements.liveBuild.footnote.textContent = "Doors must be placed along the front edge of the room.";
+    }
+    return true;
+  }
+  if (room.doors.some((door) => door.wall === placement.wall && door.index === placement.index)) {
+    if (elements.liveBuild?.footnote) {
+      elements.liveBuild.footnote.textContent = "A door already exists on that panel.";
+    }
+    return true;
+  }
+  room.doors.push(placement);
+  room.doorInstalled = true;
+  const blueprint = getBlueprint(room.type);
+  logEvent(
+    `${blueprint?.name ?? "Room"} door added on ${describeStructureLocation(room, placement)}.`,
+    "positive"
+  );
+  setStructurePlacementMode("idle", room.id);
+  renderHospitalCanvas();
+  renderBuildMenuStructure();
+  renderBuildMenuInteriors();
+  updateBuildTabStates();
+  setBuildMenuTab("interiors");
+  recalculateAmbience();
+  updateStats();
+  return true;
+};
+
+const placeWindowAt = (room, x, y) => {
+  const placement = resolveWindowPlacement(room, x, y);
+  if (!placement) {
+    if (elements.liveBuild?.footnote) {
+      elements.liveBuild.footnote.textContent = "Click a room wall panel to install a window.";
+    }
+    return true;
+  }
+  if (room.windows.some((window) => window.wall === placement.wall && window.index === placement.index)) {
+    if (elements.liveBuild?.footnote) {
+      elements.liveBuild.footnote.textContent = "A window already occupies that panel.";
+    }
+    return true;
+  }
+  room.windows.push(placement);
+  const blueprint = getBlueprint(room.type);
+  logEvent(
+    `${blueprint?.name ?? "Room"} window added on ${describeStructureLocation(room, placement)}.`,
+    "positive"
+  );
+  renderHospitalCanvas();
+  renderBuildMenuStructure();
+  renderBuildMenuInteriors();
+  return true;
+};
+
+const handleStructurePlacementClick = (x, y) => {
+  if (!isStructurePlacementActive()) {
+    return false;
+  }
+  const room = ensureRoomStructure(getRoomById(buildFlowState.activeRoomId));
+  if (!room) {
+    setStructurePlacementMode("idle");
+    return false;
+  }
+  switch (buildFlowState.mode) {
+    case "placing-door":
+      return placeDoorAt(room, x, y);
+    case "placing-window":
+      return placeWindowAt(room, x, y);
+    default:
+      return false;
+  }
+};
+
 const handleCanvasWheel = (event) => {
   if (viewMode !== "showcase") {
     return;
@@ -642,8 +858,29 @@ const endShowcasePan = () => {
 
 const handleCanvasPointerDown = (event) => {
   if (viewMode !== "showcase") return;
-  if (event.pointerType === "mouse" && event.button !== 0) {
+  const isPrimaryButton = event.pointerType === "mouse" ? event.button === 0 : true;
+  if (isPrimaryButton && isStructurePlacementActive()) {
+    const tile = getShowcaseTileFromEvent(event);
+    if (tile && handleStructurePlacementClick(tile.x, tile.y)) {
+      event.preventDefault();
+      return;
+    }
+  }
+  if (isPrimaryButton && isBuildSelectionActive()) {
+    const tile = getShowcaseTileFromEvent(event);
+    if (tile) {
+      const began = beginBuildPreview(event.pointerId ?? null, tile.x, tile.y, event.currentTarget);
+      if (began) {
+        event.preventDefault();
+        return;
+      }
+    }
+  }
+  if (event.pointerType === "mouse" && event.button !== 0 && event.button !== 1 && event.button !== 2) {
     return;
+  }
+  if (event.pointerType === "mouse" && event.button === 2) {
+    event.preventDefault();
   }
   isShowcasePanning = true;
   showcasePanPointerId = event.pointerId;
@@ -654,6 +891,21 @@ const handleCanvasPointerDown = (event) => {
 };
 
 const handleCanvasPointerMove = (event) => {
+  if (
+    buildPreviewState.active &&
+    (buildPreviewState.pointerId === null || event.pointerId === buildPreviewState.pointerId)
+  ) {
+    const tile = getShowcaseTileFromEvent(event);
+    if (tile) {
+      updateBuildPreviewBounds(tile.x, tile.y);
+    }
+    event.preventDefault();
+    return;
+  }
+  if (!buildPreviewState.active && isBuildSelectionActive()) {
+    const tile = getShowcaseTileFromEvent(event);
+    setBuildHover(tile);
+  }
   if (!isShowcasePanning || event.pointerId !== showcasePanPointerId) {
     return;
   }
@@ -671,6 +923,23 @@ const handleCanvasPointerMove = (event) => {
 };
 
 const handleCanvasPointerUp = (event) => {
+  if (
+    buildPreviewState.active &&
+    (buildPreviewState.pointerId === null || event.pointerId === buildPreviewState.pointerId)
+  ) {
+    finalizeBuildPreview(true);
+    if (isBuildSelectionActive()) {
+      const tile = getShowcaseTileFromEvent(event);
+      if (tile) {
+        setBuildHover(tile);
+      }
+    } else {
+      clearBuildHover();
+    }
+    event.currentTarget.releasePointerCapture?.(event.pointerId);
+    event.preventDefault();
+    return;
+  }
   if (event.pointerId !== showcasePanPointerId) {
     return;
   }
@@ -679,11 +948,30 @@ const handleCanvasPointerUp = (event) => {
 };
 
 const handleCanvasPointerCancel = (event) => {
+  if (
+    buildPreviewState.active &&
+    (buildPreviewState.pointerId === null || event.pointerId === buildPreviewState.pointerId)
+  ) {
+    cancelBuildPreview();
+  }
+  if (!buildPreviewState.active) {
+    clearBuildHover();
+  }
   if (event.pointerId && event.pointerId !== showcasePanPointerId) {
     return;
   }
   event.currentTarget?.releasePointerCapture?.(event.pointerId);
   endShowcasePan();
+};
+
+const handleCanvasPointerLeave = (event) => {
+  if (!buildPreviewState.active) {
+    clearBuildHover();
+  }
+  if (isShowcasePanning && event.pointerId === showcasePanPointerId) {
+    event.currentTarget?.releasePointerCapture?.(event.pointerId);
+    endShowcasePan();
+  }
 };
 
 const createOffscreenCanvas = (width, height) => {
@@ -867,85 +1155,8 @@ const getLockedTileSprite = () => {
   return lockedTileSprite;
 };
 
-const getRoomTileSprite = (theme, visualKey, visual) => {
-  const palette = theme?.palette ?? {};
-  const cacheKey = [
-    visualKey,
-    palette.base ?? visual?.color ?? "",
-    palette.mid ?? "",
-    palette.accent ?? "",
-  ].join("|");
-  if (!themedTileCache.has(cacheKey)) {
-    const canvas = createOffscreenCanvas(CANVAS_CELL, CANVAS_CELL);
-    const ctx = canvas.getContext("2d");
-    const baseColor = palette.base ?? visual?.color ?? "#475569";
-    const accentColor = palette.mid ?? visual?.color ?? "#475569";
-    ctx.save();
-    ctx.shadowColor = withAlpha(accentColor, 0.25);
-    ctx.shadowBlur = 12;
-    const baseGradient = ctx.createLinearGradient(0, 0, CANVAS_CELL, CANVAS_CELL);
-    baseGradient.addColorStop(0, shiftColor(baseColor, 0.18));
-    baseGradient.addColorStop(0.65, baseColor);
-    baseGradient.addColorStop(1, shiftColor(baseColor, -0.2));
-    ctx.fillStyle = baseGradient;
-    drawRoundedRect(ctx, 4, 4, CANVAS_CELL - 8, CANVAS_CELL - 8, 10);
-    ctx.fill();
-    ctx.save();
-    drawRoundedRect(ctx, 4, 4, CANVAS_CELL - 8, CANVAS_CELL - 8, 10);
-    ctx.clip();
-    const floorLight = ctx.createRadialGradient(
-      CANVAS_CELL / 2,
-      CANVAS_CELL / 2 + 4,
-      CANVAS_CELL * 0.15,
-      CANVAS_CELL / 2,
-      CANVAS_CELL / 2 + 4,
-      CANVAS_CELL * 0.9
-    );
-    floorLight.addColorStop(0, withAlpha(shiftColor(baseColor, 0.35), 0.4));
-    floorLight.addColorStop(0.45, withAlpha(shiftColor(baseColor, 0.1), 0.18));
-    floorLight.addColorStop(1, "rgba(15, 23, 42, 0)");
-    ctx.globalCompositeOperation = "lighter";
-    ctx.fillStyle = floorLight;
-    ctx.fillRect(4, 4, CANVAS_CELL - 8, CANVAS_CELL - 8);
-    ctx.globalCompositeOperation = "source-over";
-    ctx.globalAlpha = 0.18;
-    ctx.strokeStyle = withAlpha(shiftColor(baseColor, -0.25), 0.4);
-    ctx.lineWidth = 1;
-    for (let offset = -CANVAS_CELL; offset < CANVAS_CELL * 2; offset += 7) {
-      ctx.beginPath();
-      ctx.moveTo(offset, 4);
-      ctx.lineTo(offset - CANVAS_CELL, CANVAS_CELL - 4);
-      ctx.stroke();
-    }
-    ctx.strokeStyle = withAlpha(shiftColor(baseColor, -0.18), 0.35);
-    for (let stripe = 8; stripe < CANVAS_CELL - 8; stripe += 6) {
-      ctx.beginPath();
-      ctx.moveTo(6, stripe);
-      ctx.lineTo(CANVAS_CELL - 6, stripe);
-      ctx.stroke();
-    }
-    ctx.globalAlpha = 1;
-    ctx.restore();
-    ctx.shadowBlur = 0;
-    const accentGradient = ctx.createLinearGradient(0, 0, CANVAS_CELL, CANVAS_CELL / 2);
-    accentGradient.addColorStop(0, withAlpha(accentColor, 0.45));
-    accentGradient.addColorStop(1, withAlpha(shiftColor(accentColor, -0.3), 0.1));
-    ctx.fillStyle = accentGradient;
-    drawRoundedRect(ctx, 4, 4, CANVAS_CELL - 8, CANVAS_CELL / 2.6, 10);
-    ctx.fill();
-    ctx.save();
-    if (visual?.furniture) {
-      visual.furniture(ctx, 0, 0);
-    }
-    ctx.restore();
-    ctx.restore();
-    ctx.strokeStyle = "rgba(15, 23, 42, 0.85)";
-    ctx.lineWidth = 1;
-    ctx.strokeRect(0.5, 0.5, CANVAS_CELL - 1, CANVAS_CELL - 1);
-    themedTileCache.set(cacheKey, canvas);
-  }
-  return themedTileCache.get(cacheKey);
-};
+const getRoomTileSprite = (theme, visualKey, visual) =>
+  renderEngine.getRoomTileSprite(theme, visualKey, visual);
 
 const CUSTOM_SIZE_ID_PATTERN = /^custom-(\d+)x(\d+)$/i;
 const customSizeCache = new Map();
@@ -1000,6 +1211,41 @@ const getSizeOption = (id) => {
   return ROOM_SIZE_LIBRARY[0];
 };
 
+const getRoomCapacity = (layout) => {
+  const area = Math.max(1, layout.width * layout.height);
+  const machineSlots = Math.max(1, Math.floor((area + 1) / 2));
+  const decorSlots = Math.max(2, area + Math.max(1, Math.floor(area / 2)));
+  return { machineSlots, decorSlots };
+};
+
+const enforceDesignerCapacities = () => {
+  const layout = getSizeOption(designerState.sizeId);
+  const capacity = getRoomCapacity(layout);
+  const machines = Array.from(designerState.machines);
+  const trimmedMachines = [];
+  if (machines.includes("standard-kit")) {
+    trimmedMachines.push("standard-kit");
+  }
+  machines.forEach((machine) => {
+    if (machine === "standard-kit") return;
+    if (trimmedMachines.length >= capacity.machineSlots) return;
+    trimmedMachines.push(machine);
+  });
+  while (trimmedMachines.length > capacity.machineSlots) {
+    trimmedMachines.pop();
+  }
+  if (!trimmedMachines.includes("standard-kit")) {
+    trimmedMachines.unshift("standard-kit");
+  }
+  designerState.machines = new Set(trimmedMachines.slice(0, capacity.machineSlots));
+
+  const decorations = Array.from(designerState.decorations);
+  if (decorations.length > capacity.decorSlots) {
+    designerState.decorations = new Set(decorations.slice(0, capacity.decorSlots));
+  }
+  return capacity;
+};
+
 const designerState = {
   blueprint: null,
   sizeId: ROOM_SIZE_LIBRARY[0].id,
@@ -1008,6 +1254,11 @@ const designerState = {
   decorations: new Set(),
   editingRoomId: null,
   preview: null,
+};
+
+const buildFlowState = {
+  activeRoomId: null,
+  mode: "idle", // "idle" | "placing-door" | "placing-window"
 };
 
 let buildMenuTab = "rooms";
@@ -1026,6 +1277,55 @@ const buildPreviewState = {
   justPlaced: false,
 };
 
+const buildHoverState = {
+  active: false,
+  x: 0,
+  y: 0,
+  width: 0,
+  height: 0,
+  valid: false,
+};
+
+const clearBuildHover = () => {
+  if (!buildHoverState.active) {
+    return;
+  }
+  buildHoverState.active = false;
+  renderHospitalCanvas();
+};
+
+const setBuildHover = (tile) => {
+  if (!tile) {
+    clearBuildHover();
+    return;
+  }
+  const layout = getSizeOption(designerState.sizeId);
+  const layoutWidth = layout.width;
+  const layoutHeight = layout.height;
+  const maxX = Math.max(0, GRID_WIDTH - layoutWidth);
+  const maxY = Math.max(0, GRID_HEIGHT - layoutHeight);
+  const clampedX = clamp(tile.x, 0, maxX);
+  const clampedY = clamp(tile.y, 0, maxY);
+  const valid = canPlaceFootprint(clampedX, clampedY, layoutWidth, layoutHeight);
+  if (
+    buildHoverState.active &&
+    buildHoverState.x === clampedX &&
+    buildHoverState.y === clampedY &&
+    buildHoverState.width === layoutWidth &&
+    buildHoverState.height === layoutHeight &&
+    buildHoverState.valid === valid
+  ) {
+    return;
+  }
+  buildHoverState.active = true;
+  buildHoverState.x = clampedX;
+  buildHoverState.y = clampedY;
+  buildHoverState.width = layoutWidth;
+  buildHoverState.height = layoutHeight;
+  buildHoverState.valid = valid;
+  renderHospitalCanvas();
+};
+
 const resetBuildPreview = () => {
   buildPreviewState.active = false;
   buildPreviewState.pointerId = null;
@@ -1038,6 +1338,7 @@ const resetBuildPreview = () => {
   buildPreviewState.height = 0;
   buildPreviewState.valid = false;
   buildPreviewState.justPlaced = false;
+  buildHoverState.active = false;
   updateGridPreviewHighlight();
 };
 
@@ -1066,6 +1367,8 @@ const summarizeRoomDesign = ({ blueprint, sizeId, layoutOverride, interiorId, ma
   const machineUpkeep = machineDefs.reduce((sum, machine) => sum + machine.upkeep, 0);
   const decorUpkeep = decorDefs.reduce((sum, decor) => sum + decor.upkeep, 0);
   const totalUpkeep = Math.round(baseUpkeep + machineUpkeep + decorUpkeep);
+
+  const capacity = getRoomCapacity(sizeOption);
 
   const severityBoost =
     sizeOption.severityBonus +
@@ -1098,6 +1401,7 @@ const summarizeRoomDesign = ({ blueprint, sizeId, layoutOverride, interiorId, ma
     machineCost,
     decorCost,
     upkeep: totalUpkeep,
+    capacity,
     severityBoost,
     environmentBoost,
     welfareBoost,
@@ -1782,12 +2086,137 @@ const getBlueprint = (roomType) => roomCatalog.find((room) => room.id === roomTy
 
 const getRoomById = (roomId) => state.rooms.find((room) => room.id === roomId);
 
+const ensureRoomStructure = (room) => {
+  if (!room) return room;
+  if (!Array.isArray(room.doors)) {
+    room.doors = [];
+  }
+  if (!Array.isArray(room.windows)) {
+    room.windows = [];
+  }
+  room.wallsComplete = room.wallsComplete !== false;
+  room.doorInstalled = Boolean(room.doorInstalled || room.doors.length);
+  return room;
+};
+
+const setActiveInteriorRoom = (roomId) => {
+  const room = ensureRoomStructure(getRoomById(roomId));
+  buildFlowState.activeRoomId = room ? room.id : null;
+  return room ?? null;
+};
+
+const getActiveInteriorRoom = () => ensureRoomStructure(getRoomById(buildFlowState.activeRoomId));
+
+const isRoomWallsClosed = (room) => {
+  const target = ensureRoomStructure(room);
+  return Boolean(target && target.wallsComplete !== false);
+};
+
+const isRoomReadyForInterior = (room) => {
+  const target = ensureRoomStructure(room);
+  return Boolean(target && target.wallsComplete !== false && target.doorInstalled);
+};
+
+const isStructurePlacementActive = () => buildFlowState.mode !== "idle";
+
+const setStructurePlacementMode = (mode = "idle", roomId = buildFlowState.activeRoomId) => {
+  buildFlowState.mode = mode;
+  if (roomId) {
+    const target = ensureRoomStructure(getRoomById(roomId));
+    buildFlowState.activeRoomId = target ? target.id : buildFlowState.activeRoomId;
+  }
+  if (!getRoomById(buildFlowState.activeRoomId)) {
+    buildFlowState.activeRoomId = null;
+  }
+  updateBuildGuidance();
+};
+
+const describeStructureLocation = (room, fixture) => {
+  if (!room || !fixture) return "Unknown";
+  const wallLabels = { north: "North", south: "South", east: "East", west: "West" };
+  const wallName = wallLabels[fixture.wall] ?? "Wall";
+  const span = fixture.wall === "north" || fixture.wall === "south" ? room.width : room.height;
+  const slot = clamp(fixture.index + 1, 1, span);
+  return `${wallName} wall • Panel ${slot}`;
+};
+
+const applyInteriorThemeToRoom = (room, themeId) => {
+  if (!room) return false;
+  const blueprint = getBlueprint(room.type);
+  if (!blueprint) return false;
+  const layout = createCustomLayoutOption(room.width, room.height);
+  const machines = room.machines?.length ? [...room.machines] : ["standard-kit"];
+  if (!machines.includes("standard-kit")) {
+    machines.unshift("standard-kit");
+  }
+  const decorations = room.decorations ?? [];
+  const currentPreview = summarizeRoomDesign({
+    blueprint,
+    sizeId: room.sizeId ?? layout.id,
+    layoutOverride: layout,
+    interiorId: room.interiorId ?? themeId,
+    machines,
+    decorations,
+  });
+  const nextPreview = summarizeRoomDesign({
+    blueprint,
+    sizeId: room.sizeId ?? layout.id,
+    layoutOverride: layout,
+    interiorId: themeId,
+    machines,
+    decorations,
+  });
+  const costDelta = nextPreview.totalCost - currentPreview.totalCost;
+  if (costDelta > 0 && state.stats.cash < costDelta) {
+    logEvent(
+      `Applying ${nextPreview.interior.label} requires ¤${formatCurrency(costDelta)} more funds.`,
+      "negative"
+    );
+    return false;
+  }
+  if (costDelta > 0) {
+    state.stats.cash -= costDelta;
+    state.stats.expensesToday += costDelta;
+  }
+  room.interiorId = themeId;
+  room.costInvested = Math.max(nextPreview.totalCost, room.costInvested ?? nextPreview.totalCost);
+  room.upkeep = nextPreview.upkeep;
+  room.reputationBoost = nextPreview.reputationBoost;
+  room.environmentBoost = nextPreview.environmentBoost;
+  room.welfareBoost = nextPreview.welfareBoost;
+  room.moraleBoost = nextPreview.moraleBoost;
+  room.severityBoost = nextPreview.severityBoost;
+  room.severityCapacity = Math.max(
+    0,
+    Math.round((blueprint.baseSeverity ?? 0) + (nextPreview.severityBoost ?? 0))
+  );
+  const reputationDelta = (nextPreview.reputationBoost ?? 0) - (currentPreview.reputationBoost ?? 0);
+  if (reputationDelta) {
+    state.stats.reputation = clamp(state.stats.reputation + reputationDelta, 0, 100);
+  }
+  logEvent(
+    `${blueprint.name} interior switched to ${nextPreview.interior.label}.`,
+    "positive"
+  );
+  return true;
+};
+
 const highlightBuildSelection = (roomId) => {
   const container = elements.buildMenuPanels?.rooms ?? elements.buildOptions;
-  if (!container) return;
-  container.querySelectorAll("[data-room]").forEach((button) => {
-    button.classList.toggle("selected", button.dataset.room === roomId);
-  });
+  if (container) {
+    container.querySelectorAll("[data-room]").forEach((button) => {
+      button.classList.toggle("selected", button.dataset.room === roomId);
+    });
+  }
+  if (elements.liveBuild?.palette) {
+    elements.liveBuild.palette.querySelectorAll("[data-room]").forEach((button) => {
+      const isActive = button.dataset.room === roomId;
+      button.classList.toggle("selected", isActive);
+      if (button.hasAttribute("aria-checked")) {
+        button.setAttribute("aria-checked", isActive ? "true" : "false");
+      }
+    });
+  }
 };
 
 const updateDesignerSummary = () => {
@@ -1836,8 +2265,14 @@ const updateDesignerSummary = () => {
   const decorNames = preview.decorations.map((decor) => decor.label).join(", ");
   decorLine.innerHTML = `<strong>Decor:</strong> ${decorNames || "None"}`;
 
+  const capacityLine = document.createElement("div");
+  const capacity = preview.capacity ?? getRoomCapacity(activeLayout);
+  capacityLine.innerHTML = `<strong>Capacity:</strong> Equipment ${
+    preview.machines.length
+  }/${capacity.machineSlots} • Decor ${preview.decorations.length}/${capacity.decorSlots}`;
+
   summary.innerHTML = "";
-  summary.append(layoutLine, costLine, upkeepLine, machineLine, decorLine);
+  summary.append(layoutLine, costLine, upkeepLine, machineLine, decorLine, capacityLine);
 
   const amenityDefs = preview.decorations.filter((decor) => decor.amenityType);
   if (amenityDefs.length) {
@@ -1897,6 +2332,8 @@ const updateDesignerOptions = () => {
   const { size, theme, machines, decor } = elements.designer;
   if (!size || !theme || !machines || !decor) return;
 
+  machines.classList.remove("designer-equipment-list");
+
   if (!blueprint) {
     size.innerHTML = "<option value=\"\">Select a room</option>";
     theme.innerHTML = "";
@@ -1931,6 +2368,8 @@ const updateDesignerOptions = () => {
   }
   size.value = designerState.sizeId;
 
+  enforceDesignerCapacities();
+
   if (!profile.interiors.includes(designerState.interiorId)) {
     designerState.interiorId = profile.interiors[0];
   }
@@ -1946,50 +2385,110 @@ const updateDesignerOptions = () => {
 
   machines.innerHTML = "";
   const machineIds = profile.machines.length ? profile.machines : ["standard-kit"];
-  const baselineOnly = machineIds.every((id) => id === "standard-kit");
-  if (baselineOnly) {
-    designerState.machines = new Set(["standard-kit"]);
-    const note = document.createElement("p");
-    note.textContent = "Baseline kit installed. No specialist machines available for this room.";
-    machines.appendChild(note);
-  } else {
-    machineIds.forEach((id) => {
-      const def = getMachineDefinition(id);
-      const label = document.createElement("label");
-      const checkbox = document.createElement("input");
-      checkbox.type = "checkbox";
-      checkbox.value = id;
-      checkbox.checked = designerState.machines.has(id);
-      if (id === "standard-kit") {
-        checkbox.disabled = true;
-        designerState.machines.add(id);
-      }
-      checkbox.addEventListener("change", () => {
-        if (checkbox.checked) {
-          designerState.machines.add(id);
-        } else {
-          designerState.machines.delete(id);
-          if (!designerState.machines.size) {
-            designerState.machines.add("standard-kit");
-          }
-        }
-        updateDesignerSummary();
-      });
-      const text = document.createElement("span");
-      const details = [];
-      if (def.severityBoost) {
-        details.push(`+${def.severityBoost} severity`);
-      }
-      if (def.welfareBoost) {
-        details.push(`+${def.welfareBoost} welfare`);
-      }
-      text.textContent = `${def.label} – ¤${formatCurrency(def.cost)}${
-        details.length ? ` (${details.join(", ")})` : ""
-      }`;
-      label.append(checkbox, text);
-      machines.appendChild(label);
-    });
+  if (machineIds.length) {
+    machines.classList.add("designer-equipment-list");
   }
+  const baselineOnly = machineIds.every((id) => id === "standard-kit");
+  machineIds.forEach((id) => {
+    const def = getMachineDefinition(id);
+    const label = document.createElement("label");
+    label.className = "designer-equipment-option";
+    const checkbox = document.createElement("input");
+    checkbox.type = "checkbox";
+    checkbox.value = id;
+    checkbox.className = "designer-equipment-option__checkbox";
+    checkbox.checked = designerState.machines.has(id);
+    if (id === "standard-kit") {
+      checkbox.disabled = true;
+      designerState.machines.add(id);
+    }
+
+    const updateVisualState = () => {
+      label.classList.toggle("is-selected", checkbox.checked);
+      label.classList.toggle("is-disabled", checkbox.disabled);
+    };
+
+    checkbox.addEventListener("change", () => {
+      if (checkbox.checked) {
+        designerState.machines.add(id);
+      } else {
+        designerState.machines.delete(id);
+        if (!designerState.machines.size) {
+          designerState.machines.add("standard-kit");
+        }
+      }
+      enforceDesignerCapacities();
+      if (checkbox.checked && !designerState.machines.has(id) && elements.liveBuild?.footnote) {
+        elements.liveBuild.footnote.textContent =
+          "Maximum equipment slots reached. Expand the room to install more machines.";
+      }
+      machines.querySelectorAll("input[type=\"checkbox\"]").forEach((input) => {
+        const machineId = input.value;
+        const isSelected = designerState.machines.has(machineId);
+        input.checked = isSelected;
+        input.closest(".designer-equipment-option")?.classList.toggle("is-selected", isSelected);
+      });
+      updateDesignerSummary();
+      updateBuildGuidance();
+    });
+
+    const art = renderEngine.createMachineCardArt(def);
+    const body = document.createElement("div");
+    body.className = "designer-equipment-option__body";
+    const title = document.createElement("strong");
+    title.textContent = def.label;
+    const meta = document.createElement("div");
+    meta.className = "designer-equipment-option__meta";
+    const costMeta = document.createElement("span");
+    costMeta.textContent = `¤${formatCurrency(def.cost)}`;
+    meta.appendChild(costMeta);
+    const upkeepMeta = document.createElement("span");
+    upkeepMeta.textContent = `Upkeep ¤${formatCurrency(def.upkeep)}/day`;
+    meta.appendChild(upkeepMeta);
+    if (id === "standard-kit") {
+      const badge = document.createElement("span");
+      badge.className = "designer-equipment-option__badge";
+      badge.textContent = "Required";
+      meta.appendChild(badge);
+    }
+
+    const desc = document.createElement("p");
+    desc.className = "designer-equipment-option__description";
+    desc.textContent = def.description;
+
+    const bonuses = [];
+    if (def.severityBoost) {
+      bonuses.push(`+${def.severityBoost} severity`);
+    }
+    if (def.welfareBoost) {
+      bonuses.push(`+${def.welfareBoost} welfare`);
+    }
+    body.append(title);
+    body.append(meta);
+    body.append(desc);
+
+    if (bonuses.length) {
+      const bonusList = document.createElement("div");
+      bonusList.className = "designer-equipment-option__bonuses";
+      bonuses.forEach((labelText) => {
+        const chip = document.createElement("span");
+        chip.textContent = labelText;
+        bonusList.appendChild(chip);
+      });
+      body.append(bonusList);
+    }
+
+    if (baselineOnly && id === "standard-kit") {
+      const note = document.createElement("p");
+      note.className = "designer-equipment-option__note";
+      note.textContent = "Baseline kit installed. No specialist machines available for this room.";
+      body.append(note);
+    }
+
+    label.append(checkbox, art, body);
+    machines.appendChild(label);
+    updateVisualState();
+  });
 
   decor.innerHTML = "";
   profile.decor.forEach((id) => {
@@ -2005,6 +2504,17 @@ const updateDesignerOptions = () => {
       } else {
         designerState.decorations.delete(id);
       }
+      enforceDesignerCapacities();
+      if (checkbox.checked && !designerState.decorations.has(id) && elements.liveBuild?.footnote) {
+        elements.liveBuild.footnote.textContent =
+          "Decoration slots full. Increase the room size to place additional decor.";
+      }
+      decor.querySelectorAll("input[type=\"checkbox\"]").forEach((input) => {
+        const decorId = input.value;
+        const isSelected = designerState.decorations.has(decorId);
+        input.checked = isSelected;
+        input.closest("label")?.classList.toggle("is-selected", isSelected);
+      });
       updateDesignerSummary();
       const amenitiesPanel = elements.buildMenuPanels?.amenities;
       if (amenitiesPanel) {
@@ -2078,6 +2588,7 @@ const setDesignerBlueprint = (blueprint, { resetSelections = true, editing = fal
       Array.from(designerState.decorations).filter((id) => profile.decor.includes(id))
     );
   }
+  enforceDesignerCapacities();
   updateDesignerOptions();
 };
 
@@ -2097,6 +2608,10 @@ const loadRoomIntoDesigner = (room) => {
   highlightBuildSelection(blueprint.id);
   updateBuildGuidance();
   renderRoomManagement();
+  setActiveInteriorRoom(room.id);
+  renderBuildMenuStructure();
+  renderBuildMenuInteriors();
+  updateBuildTabStates();
 };
 
 const canPlaceFootprint = (x, y, width, height, ignoreRoom = null) => {
@@ -2347,14 +2862,24 @@ const applyDesignToRoom = () => {
   recalculateAmbience();
   updateDesignerSummary();
   updateStats();
+  renderBuildMenuStructure();
+  renderBuildMenuInteriors();
+  updateBuildTabStates();
   updateBuildGuidance();
 };
 
 const setBuildMode = (active) => {
-  if (!elements.grid) return;
-  elements.grid.classList.toggle("is-building", active);
-  if (elements.blueprintFootnote) {
-    elements.blueprintFootnote.classList.toggle("active", active);
+  if (elements.grid) {
+    elements.grid.classList.toggle("is-building", active);
+  }
+  if (elements.hospitalCanvas) {
+    elements.hospitalCanvas.classList.toggle("is-building", active);
+  }
+  if (elements.liveBuild?.overlay) {
+    elements.liveBuild.overlay.classList.toggle("is-building", active);
+  }
+  if (elements.liveBuild?.footnote) {
+    elements.liveBuild.footnote.classList.toggle("active", active);
   }
 };
 
@@ -2364,15 +2889,40 @@ const updateBuildGuidance = () => {
     updateBuildPreviewHint();
     return;
   }
+  if (isStructurePlacementActive()) {
+    const room = getActiveInteriorRoom();
+    if (!room) {
+      setStructurePlacementMode("idle");
+      return;
+    }
+    const blueprint = getBlueprint(room.type);
+    const roomLabel = blueprint?.name ?? "Room";
+    if (buildFlowState.mode === "placing-door") {
+      elements.buildHint.textContent = `Install a door for ${roomLabel}. Click a front wall panel to set the entry.`;
+      if (elements.liveBuild?.footnote) {
+        elements.liveBuild.footnote.textContent = "Doors must sit on the open edge facing the hospital floor. Click to place or press Esc to cancel.";
+      }
+    } else if (buildFlowState.mode === "placing-window") {
+      elements.buildHint.textContent = `Add windows to ${roomLabel}. Click any side wall panel to install one.`;
+      if (elements.liveBuild?.footnote) {
+        elements.liveBuild.footnote.textContent = "Place windows along the visible walls. Continue clicking to add more or press Esc to finish.";
+      }
+    }
+    setBuildMode(true);
+    clearBuildHover();
+    return;
+  }
   if (designerState.editingRoomId) {
     const room = getRoomById(designerState.editingRoomId);
     const blueprint = designerState.blueprint ?? (room ? getBlueprint(room.type) : null);
     const sizeLabel = getSizeOption(designerState.sizeId).label;
     elements.buildHint.textContent = `Editing ${blueprint?.name ?? "room"} – ${sizeLabel}. Adjust options then press "Apply design to room".`;
-    if (elements.blueprintFootnote) {
-      elements.blueprintFootnote.textContent = `Design changes do not require clicking the grid. Apply the update when you are happy with the layout or press Esc to cancel.`;
+    if (elements.liveBuild?.footnote) {
+      elements.liveBuild.footnote.textContent =
+        "Design changes apply instantly in the live hospital. Press Apply when ready or Esc to cancel.";
     }
     setBuildMode(false);
+    clearBuildHover();
     return;
   }
 
@@ -2382,7 +2932,7 @@ const updateBuildGuidance = () => {
     const size = getSizeOption(designerState.sizeId);
     const theme = getInteriorTheme(designerState.interiorId);
     let hint = `Building: ${blueprint.name} – ${size.label}, ${theme.label}. Click and drag to shape the footprint.`;
-    let footnote = `Start at your desired corner, then drag to adjust the ${size.width}×${size.height} layout (or larger). Release to build or press Esc to cancel.`;
+    let footnote = `Start at your desired corner, then drag to adjust the ${size.width}×${size.height} layout (or larger). Stay within owned land to confirm, then release to build or press Esc to cancel.`;
     if (!hasPlacementForSize(size.width, size.height)) {
       const availableParcel = state.properties.find((parcel) => !parcel.owned);
       const parcelPrompt = availableParcel
@@ -2392,28 +2942,34 @@ const updateBuildGuidance = () => {
       footnote = `Expand the campus or clear space before placing ${blueprint.name}.`;
     }
     elements.buildHint.textContent = hint;
-    if (elements.blueprintFootnote) {
-      elements.blueprintFootnote.textContent = footnote;
+    if (elements.liveBuild?.footnote) {
+      elements.liveBuild.footnote.textContent = footnote;
     }
   } else {
     elements.buildHint.textContent = "Select a room type above to begin construction.";
-    if (elements.blueprintFootnote) {
-      elements.blueprintFootnote.textContent = "Pick a room on the Build tab to start construction.";
+    if (elements.liveBuild?.footnote) {
+      elements.liveBuild.footnote.textContent =
+        "Pick a room blueprint to start building directly on the live hospital floor.";
     }
+    clearBuildHover();
   }
 };
 
 const clearBuildSelection = () => {
   resetBuildPreview();
+  clearBuildHover();
   selectedRoom = null;
   designerState.editingRoomId = null;
   designerState.blueprint = null;
   designerState.machines = new Set(["standard-kit"]);
   designerState.decorations = new Set();
+  buildFlowState.mode = "idle";
+  buildFlowState.activeRoomId = null;
   updateBuildGuidance();
   updateDesignerSummary();
   updateDesignerOptions();
   renderRoomManagement();
+  highlightBuildSelection(null);
   const container = elements.buildMenuPanels?.rooms ?? elements.buildOptions;
   if (container) {
     container
@@ -2439,6 +2995,7 @@ const renderBlueprintAxes = () => {
 };
 
 const setupGrid = () => {
+  if (!elements.grid) return;
   elements.grid.innerHTML = "";
   renderBlueprintAxes();
   for (let y = 0; y < GRID_HEIGHT; y++) {
@@ -2467,6 +3024,7 @@ const setupGrid = () => {
 };
 
 const updateGrid = () => {
+  if (!elements.grid) return;
   const cells = elements.grid.querySelectorAll(".grid-cell");
   cells.forEach((cell) => {
     const tileX = Number(cell.dataset.x);
@@ -2523,32 +3081,34 @@ const updateGrid = () => {
 };
 
 const updateGridPreviewHighlight = () => {
-  if (!elements.grid) return;
-  const cells = elements.grid.querySelectorAll(".grid-cell");
-  cells.forEach((cell) => {
-    const tileX = Number(cell.dataset.x);
-    const tileY = Number(cell.dataset.y);
-    const inPreview =
-      buildPreviewState.active &&
-      tileX >= buildPreviewState.x &&
-      tileX < buildPreviewState.x + buildPreviewState.width &&
-      tileY >= buildPreviewState.y &&
-      tileY < buildPreviewState.y + buildPreviewState.height;
-    const isOrigin =
-      inPreview && tileX === buildPreviewState.x && tileY === buildPreviewState.y;
-    cell.classList.toggle("preview", inPreview);
-    cell.classList.toggle("preview-origin", isOrigin);
-    cell.classList.toggle("preview-invalid", inPreview && !buildPreviewState.valid);
-    if (!inPreview && !cell.dataset.label && cell.textContent) {
-      cell.textContent = "";
-    }
-    if (isOrigin && !cell.dataset.label) {
-      cell.textContent = `${buildPreviewState.width}×${buildPreviewState.height}`;
-    }
-    if (!inPreview && cell.classList.contains("preview")) {
-      cell.classList.remove("preview", "preview-origin", "preview-invalid");
-    }
-  });
+  if (elements.grid) {
+    const cells = elements.grid.querySelectorAll(".grid-cell");
+    cells.forEach((cell) => {
+      const tileX = Number(cell.dataset.x);
+      const tileY = Number(cell.dataset.y);
+      const inPreview =
+        buildPreviewState.active &&
+        tileX >= buildPreviewState.x &&
+        tileX < buildPreviewState.x + buildPreviewState.width &&
+        tileY >= buildPreviewState.y &&
+        tileY < buildPreviewState.y + buildPreviewState.height;
+      const isOrigin =
+        inPreview && tileX === buildPreviewState.x && tileY === buildPreviewState.y;
+      cell.classList.toggle("preview", inPreview);
+      cell.classList.toggle("preview-origin", isOrigin);
+      cell.classList.toggle("preview-invalid", inPreview && !buildPreviewState.valid);
+      if (!inPreview && !cell.dataset.label && cell.textContent) {
+        cell.textContent = "";
+      }
+      if (isOrigin && !cell.dataset.label) {
+        cell.textContent = `${buildPreviewState.width}×${buildPreviewState.height}`;
+      }
+      if (!inPreview && cell.classList.contains("preview")) {
+        cell.classList.remove("preview", "preview-origin", "preview-invalid");
+      }
+    });
+  }
+  renderHospitalCanvas();
 };
 
 const updateBuildPreviewHint = () => {
@@ -2561,8 +3121,8 @@ const updateBuildPreviewHint = () => {
   const dims = `${buildPreviewState.width}×${buildPreviewState.height}`;
   const status = buildPreviewState.valid ? "Release to confirm." : "Space blocked.";
   elements.buildHint.textContent = `Placing ${name}: ${dims}. ${status}`;
-  if (elements.blueprintFootnote) {
-    elements.blueprintFootnote.textContent = buildPreviewState.valid
+  if (elements.liveBuild?.footnote) {
+    elements.liveBuild.footnote.textContent = buildPreviewState.valid
       ? `Drag to adjust the footprint. Release to build a ${dims} layout.`
       : `Drag to adjust the footprint. Clear space to place a ${dims} layout.`;
   }
@@ -2593,6 +3153,7 @@ const beginBuildPreview = (pointerId, x, y, target) => {
   if (!blueprint) {
     return false;
   }
+  clearBuildHover();
   buildPreviewState.active = true;
   buildPreviewState.pointerId = pointerId;
   buildPreviewState.captureElement = target ?? null;
@@ -2760,7 +3321,8 @@ const setupCanvas = () => {
     canvas.addEventListener("pointermove", handleCanvasPointerMove);
     canvas.addEventListener("pointerup", handleCanvasPointerUp);
     canvas.addEventListener("pointercancel", handleCanvasPointerCancel);
-    canvas.addEventListener("pointerleave", handleCanvasPointerCancel);
+    canvas.addEventListener("pointerleave", handleCanvasPointerLeave);
+    canvas.addEventListener("click", handleCanvasClick);
     canvas.dataset.zoomBound = "true";
   }
   invalidateCanvasCache();
@@ -2898,6 +3460,11 @@ const drawMoodGlow = (ctx, status) => {
     upset: "rgba(248, 113, 113, 0.55)",
     relieved: "rgba(74, 222, 128, 0.35)",
     calm: "rgba(148, 163, 184, 0.25)",
+    anxious: "rgba(248, 113, 113, 0.45)",
+    uneasy: "rgba(250, 204, 21, 0.35)",
+    frail: "rgba(248, 113, 113, 0.55)",
+    restless: "rgba(96, 165, 250, 0.35)",
+    bored: "rgba(148, 163, 184, 0.18)",
   };
   const tone = palette[status] ?? palette.calm;
   ctx.save();
@@ -2918,6 +3485,15 @@ const drawPatientAgentsBlueprint = (ctx) => {
     const py = patient.position.y * CANVAS_CELL;
     ctx.save();
     ctx.translate(px, py);
+    if (patient.id === selectedPatientId) {
+      ctx.save();
+      ctx.strokeStyle = "rgba(56, 189, 248, 0.85)";
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.arc(0, 0, 16, 0, Math.PI * 2);
+      ctx.stroke();
+      ctx.restore();
+    }
     drawMoodGlow(ctx, patient.mood ?? patient.status);
     const palette = getPatientAvatarPalette(patient);
     drawHumanFigure(ctx, palette, { scale: 0.85 });
@@ -3249,7 +3825,7 @@ const isoProjectBase = (x, y) => ({
   y: (x + y) * (ISO_TILE_HEIGHT / 2),
 });
 
-const createIsoProjector = (width, height) => {
+const createIsoMapper = (width, height) => {
   const corners = [
     isoProjectBase(0, 0),
     isoProjectBase(GRID_WIDTH, 0),
@@ -3262,13 +3838,35 @@ const createIsoProjector = (width, height) => {
   const maxY = Math.max(...corners.map((point) => point.y));
   const offsetX = (width - (maxX - minX)) / 2 - minX;
   const offsetY = Math.max(48, 68 - minY);
-  return (x, y) => {
+  const project = (x, y) => {
     const base = isoProjectBase(x, y);
     return {
       x: base.x + offsetX,
       y: base.y + offsetY,
     };
   };
+  const invTileWidth = 2 / ISO_TILE_WIDTH;
+  const invTileHeight = 2 / ISO_TILE_HEIGHT;
+  const unproject = (px, py) => {
+    const localX = px - offsetX;
+    const localY = py - offsetY;
+    const scaledX = localX * invTileWidth;
+    const scaledY = localY * invTileHeight;
+    const tileX = (scaledY + scaledX) / 2;
+    const tileY = (scaledY - scaledX) / 2;
+    return { x: tileX, y: tileY };
+  };
+  return { project, unproject, offsetX, offsetY };
+};
+
+const getIsoMapper = () => {
+  const width = GRID_WIDTH * CANVAS_CELL;
+  const height = GRID_HEIGHT * CANVAS_CELL;
+  if (!isoMapperCache || isoMapperCache.width !== width || isoMapperCache.height !== height) {
+    const mapper = createIsoMapper(width, height);
+    isoMapperCache = { ...mapper, width, height };
+  }
+  return isoMapperCache;
 };
 
 const drawIsoPolygon = (ctx, points) => {
@@ -3299,34 +3897,7 @@ const sampleIsoPoint = (corners, u, v) => {
 };
 
 const drawIsoFloorPattern = (ctx, corners, theme) => {
-  ctx.save();
-  drawIsoPolygon(ctx, corners);
-  ctx.clip();
-  const bounds = corners.reduce(
-    (acc, point) => ({
-      minX: Math.min(acc.minX, point.x),
-      maxX: Math.max(acc.maxX, point.x),
-      minY: Math.min(acc.minY, point.y),
-      maxY: Math.max(acc.maxY, point.y),
-    }),
-    { minX: corners[0].x, maxX: corners[0].x, minY: corners[0].y, maxY: corners[0].y }
-  );
-  ctx.strokeStyle = withAlpha(theme.palette?.decor ?? theme.palette?.accent ?? "#94a3b8", 0.14);
-  ctx.lineWidth = 1;
-  for (let offset = bounds.minX - 160; offset < bounds.maxX + 160; offset += 12) {
-    ctx.beginPath();
-    ctx.moveTo(offset, bounds.minY - 120);
-    ctx.lineTo(offset + 140, bounds.maxY + 120);
-    ctx.stroke();
-  }
-  ctx.strokeStyle = withAlpha(shiftColor(theme.palette?.base ?? "#1f2937", 0.45), 0.18);
-  for (let offset = bounds.minX - 160; offset < bounds.maxX + 160; offset += 14) {
-    ctx.beginPath();
-    ctx.moveTo(offset, bounds.maxY + 120);
-    ctx.lineTo(offset + 160, bounds.minY - 120);
-    ctx.stroke();
-  }
-  ctx.restore();
+  renderEngine.renderInteriorPolygon(ctx, corners, theme ?? {});
 };
 
 const drawIsoConsole = (ctx, point, color) => {
@@ -3397,72 +3968,107 @@ const lerpPoint = (a, b, t) => ({
   y: a.y + (b.y - a.y) * t,
 });
 
-const drawIsoWallWindows = (ctx, bottomStart, bottomEnd, topStart, topEnd, accent, count = 2) => {
-  const segments = Math.max(1, Math.round(count));
-  const wallVec = {
-    x: bottomEnd.x - bottomStart.x,
-    y: bottomEnd.y - bottomStart.y,
-  };
-  const widthVec = {
-    x: wallVec.x * 0.08,
-    y: wallVec.y * 0.08,
-  };
-  for (let index = 0; index < segments; index++) {
-    const t = (index + 1) / (segments + 1);
-    const bottomCenter = lerpPoint(bottomStart, bottomEnd, t);
-    const topCenter = lerpPoint(topStart, topEnd, t);
-    const bottomLeft = {
-      x: bottomCenter.x - widthVec.x,
-      y: bottomCenter.y - widthVec.y,
-    };
-    const bottomRight = {
-      x: bottomCenter.x + widthVec.x,
-      y: bottomCenter.y + widthVec.y,
-    };
-    const heightVec = {
-      x: topCenter.x - bottomCenter.x,
-      y: topCenter.y - bottomCenter.y,
-    };
-    const topLeft = {
-      x: bottomLeft.x + heightVec.x,
-      y: bottomLeft.y + heightVec.y,
-    };
-    const topRight = {
-      x: bottomRight.x + heightVec.x,
-      y: bottomRight.y + heightVec.y,
-    };
-    ctx.save();
-    ctx.beginPath();
-    ctx.moveTo(bottomLeft.x, bottomLeft.y);
-    ctx.lineTo(bottomRight.x, bottomRight.y);
-    ctx.lineTo(topRight.x, topRight.y);
-    ctx.lineTo(topLeft.x, topLeft.y);
-    ctx.closePath();
-    const glass = ctx.createLinearGradient(bottomLeft.x, bottomLeft.y, topRight.x, topRight.y);
-    glass.addColorStop(0, withAlpha("#f8fafc", 0.55));
-    glass.addColorStop(1, withAlpha(accent, 0.18));
-    ctx.fillStyle = glass;
-    ctx.fill();
-    ctx.strokeStyle = withAlpha(accent, 0.5);
-    ctx.lineWidth = 0.8;
-    ctx.stroke();
-    const mullionBottom = lerpPoint(bottomLeft, bottomRight, 0.5);
-    const mullionTop = lerpPoint(topLeft, topRight, 0.5);
-    ctx.beginPath();
-    ctx.moveTo(mullionBottom.x, mullionBottom.y);
-    ctx.lineTo(mullionTop.x, mullionTop.y);
-    ctx.strokeStyle = withAlpha(accent, 0.35);
-    ctx.lineWidth = 0.6;
-    ctx.stroke();
-    ctx.restore();
-  }
+const buildWallGeometry = (corners, topCorners, room) => ({
+  north: {
+    bottomStart: corners[0],
+    bottomEnd: corners[1],
+    topStart: topCorners[0],
+    topEnd: topCorners[1],
+    length: Math.max(1, room.width),
+  },
+  east: {
+    bottomStart: corners[1],
+    bottomEnd: corners[2],
+    topStart: topCorners[1],
+    topEnd: topCorners[2],
+    length: Math.max(1, room.height),
+  },
+  south: {
+    bottomStart: corners[3],
+    bottomEnd: corners[2],
+    topStart: topCorners[3],
+    topEnd: topCorners[2],
+    length: Math.max(1, room.width),
+  },
+  west: {
+    bottomStart: corners[0],
+    bottomEnd: corners[3],
+    topStart: topCorners[0],
+    topEnd: topCorners[3],
+    length: Math.max(1, room.height),
+  },
+});
+
+const sampleWallSegment = (wall, index, inset = 0.18) => {
+  if (!wall || !wall.length) return null;
+  const clampedIndex = clamp(index, 0, wall.length - 1);
+  const span = Math.max(1, wall.length);
+  const leftT = (clampedIndex + inset) / span;
+  const rightT = (clampedIndex + 1 - inset) / span;
+  const bottomLeft = lerpPoint(wall.bottomStart, wall.bottomEnd, leftT);
+  const bottomRight = lerpPoint(wall.bottomStart, wall.bottomEnd, rightT);
+  const topLeft = lerpPoint(wall.topStart, wall.topEnd, leftT);
+  const topRight = lerpPoint(wall.topStart, wall.topEnd, rightT);
+  return { bottomLeft, bottomRight, topLeft, topRight };
 };
 
-const drawIsoDoorway = (ctx, frontLeft, frontRight, accent) => {
-  const center = lerpPoint(frontLeft, frontRight, 0.5);
+const drawIsoDoorPanel = (ctx, segment, accent) => {
+  if (!segment) return;
+  const { bottomLeft, bottomRight, topLeft, topRight } = segment;
+  ctx.save();
+  ctx.beginPath();
+  ctx.moveTo(bottomLeft.x, bottomLeft.y);
+  ctx.lineTo(bottomRight.x, bottomRight.y);
+  ctx.lineTo(topRight.x, topRight.y);
+  ctx.lineTo(topLeft.x, topLeft.y);
+  ctx.closePath();
+  const fill = ctx.createLinearGradient(bottomLeft.x, bottomLeft.y, topRight.x, topRight.y);
+  fill.addColorStop(0, withAlpha("#0f172a", 0.92));
+  fill.addColorStop(1, withAlpha(shiftColor(accent, 0.2), 0.6));
+  ctx.fillStyle = fill;
+  ctx.fill();
+  ctx.strokeStyle = withAlpha(accent, 0.65);
+  ctx.lineWidth = 0.9;
+  ctx.stroke();
+  ctx.restore();
+};
+
+const drawIsoWindowPanel = (ctx, segment, accent) => {
+  if (!segment) return;
+  const { bottomLeft, bottomRight, topLeft, topRight } = segment;
+  ctx.save();
+  ctx.beginPath();
+  ctx.moveTo(bottomLeft.x, bottomLeft.y);
+  ctx.lineTo(bottomRight.x, bottomRight.y);
+  ctx.lineTo(topRight.x, topRight.y);
+  ctx.lineTo(topLeft.x, topLeft.y);
+  ctx.closePath();
+  const glass = ctx.createLinearGradient(bottomLeft.x, bottomLeft.y, topRight.x, topRight.y);
+  glass.addColorStop(0, withAlpha("#f8fafc", 0.55));
+  glass.addColorStop(1, withAlpha(accent, 0.18));
+  ctx.fillStyle = glass;
+  ctx.fill();
+  ctx.strokeStyle = withAlpha(accent, 0.4);
+  ctx.lineWidth = 0.7;
+  ctx.stroke();
+  const mullionBottom = lerpPoint(bottomLeft, bottomRight, 0.5);
+  const mullionTop = lerpPoint(topLeft, topRight, 0.5);
+  ctx.beginPath();
+  ctx.moveTo(mullionBottom.x, mullionBottom.y);
+  ctx.lineTo(mullionTop.x, mullionTop.y);
+  ctx.strokeStyle = withAlpha(accent, 0.3);
+  ctx.lineWidth = 0.55;
+  ctx.stroke();
+  ctx.restore();
+};
+
+const drawIsoDoorway = (ctx, segment, accent) => {
+  if (!segment) return;
+  const { bottomLeft, bottomRight } = segment;
+  const center = lerpPoint(bottomLeft, bottomRight, 0.5);
   const widthVec = {
-    x: (frontRight.x - frontLeft.x) * 0.18,
-    y: (frontRight.y - frontLeft.y) * 0.18,
+    x: (bottomRight.x - bottomLeft.x) * 0.45,
+    y: (bottomRight.y - bottomLeft.y) * 0.45,
   };
   const leftBase = {
     x: center.x - widthVec.x,
@@ -3596,6 +4202,120 @@ const drawIsoTile = (ctx, project, x, y, { locked, occupant }) => {
   ctx.restore();
 };
 
+const drawIsoParcelFloor = (ctx, project, parcel) => {
+  const corners = [
+    project(parcel.x, parcel.y),
+    project(parcel.x + parcel.width, parcel.y),
+    project(parcel.x + parcel.width, parcel.y + parcel.height),
+    project(parcel.x, parcel.y + parcel.height),
+  ];
+  ctx.save();
+  drawIsoPolygon(ctx, corners);
+  const base = ctx.createLinearGradient(corners[0].x, corners[0].y, corners[2].x, corners[2].y);
+  base.addColorStop(0, "rgba(30, 64, 175, 0.42)");
+  base.addColorStop(0.5, "rgba(56, 189, 248, 0.18)");
+  base.addColorStop(1, "rgba(8, 47, 73, 0.82)");
+  ctx.fillStyle = base;
+  ctx.fill();
+  const centerX = (corners[0].x + corners[2].x) / 2;
+  const centerY = (corners[0].y + corners[2].y) / 2;
+  const glowRadius = Math.max(parcel.width, parcel.height) * 64;
+  const glow = ctx.createRadialGradient(centerX, centerY, 12, centerX, centerY, glowRadius);
+  glow.addColorStop(0, `rgba(148, 197, 255, ${0.14 + showcaseAnimation.pulse * 0.08})`);
+  glow.addColorStop(1, "rgba(148, 197, 255, 0)");
+  ctx.fillStyle = glow;
+  ctx.fill();
+  ctx.strokeStyle = "rgba(148, 197, 255, 0.28)";
+  ctx.lineWidth = 1.6;
+  ctx.stroke();
+  ctx.restore();
+
+  ctx.save();
+  drawIsoPolygon(ctx, corners);
+  ctx.clip();
+  const sweep = Math.max(3, parcel.height + 1);
+  for (let i = 1; i <= sweep; i++) {
+    const v = i / (sweep + 1);
+    const start = sampleIsoPoint(corners, 0, v);
+    const end = sampleIsoPoint(corners, 1, v);
+    const shimmer = 0.08 + showcaseAnimation.wave * 0.05;
+    ctx.strokeStyle = `rgba(148, 197, 255, ${shimmer})`;
+    ctx.lineWidth = 1.1;
+    ctx.beginPath();
+    ctx.moveTo(start.x, start.y);
+    ctx.lineTo(end.x, end.y);
+    ctx.stroke();
+  }
+  ctx.restore();
+};
+
+const drawIsoLockedParcel = (ctx, project, parcel) => {
+  const corners = [
+    project(parcel.x, parcel.y),
+    project(parcel.x + parcel.width, parcel.y),
+    project(parcel.x + parcel.width, parcel.y + parcel.height),
+    project(parcel.x, parcel.y + parcel.height),
+  ];
+  ctx.save();
+  drawIsoPolygon(ctx, corners);
+  const overlay = ctx.createLinearGradient(corners[0].x, corners[0].y, corners[2].x, corners[2].y);
+  overlay.addColorStop(0, "rgba(15, 23, 42, 0.78)");
+  overlay.addColorStop(1, "rgba(8, 25, 50, 0.9)");
+  ctx.fillStyle = overlay;
+  ctx.fill();
+  ctx.setLineDash([12, 9]);
+  ctx.lineWidth = 2.2;
+  ctx.strokeStyle = "rgba(148, 197, 255, 0.55)";
+  ctx.stroke();
+  ctx.restore();
+
+  const labelPoint = project(
+    parcel.x + parcel.width / 2,
+    parcel.y + parcel.height / 2
+  );
+  ctx.save();
+  ctx.textAlign = "center";
+  ctx.font = "600 14px 'Segoe UI', sans-serif";
+  ctx.fillStyle = "rgba(191, 219, 254, 0.92)";
+  ctx.shadowColor = "rgba(15, 23, 42, 0.85)";
+  ctx.shadowBlur = 8;
+  ctx.fillText("For Sale", labelPoint.x, labelPoint.y - 6);
+  ctx.font = "600 12px 'Segoe UI', sans-serif";
+  ctx.fillText(`¤${formatCurrency(parcel.cost)}`, labelPoint.x, labelPoint.y + 12);
+  ctx.restore();
+};
+
+const drawIsoBuildOverlay = (ctx, project, preview) => {
+  if (!preview) return;
+  const { x, y, width, height, valid } = preview;
+  if (width <= 0 || height <= 0) {
+    return;
+  }
+  const p0 = project(x, y);
+  const p1 = project(x + width, y);
+  const p2 = project(x + width, y + height);
+  const p3 = project(x, y + height);
+  const points = [p0, p1, p2, p3];
+  ctx.save();
+  drawIsoPolygon(ctx, points);
+  ctx.fillStyle = valid ? "rgba(56, 189, 248, 0.22)" : "rgba(248, 113, 113, 0.26)";
+  ctx.fill();
+  ctx.lineWidth = 2.4;
+  ctx.setLineDash([12, 8]);
+  ctx.strokeStyle = valid ? "rgba(148, 197, 255, 0.85)" : "rgba(248, 113, 113, 0.85)";
+  ctx.stroke();
+  ctx.restore();
+  const center = project(x + width / 2, y + height / 2);
+  ctx.save();
+  ctx.font = "700 16px 'Segoe UI', sans-serif";
+  ctx.fillStyle = "rgba(226, 232, 240, 0.95)";
+  ctx.textAlign = "center";
+  ctx.shadowColor = valid ? "rgba(56, 189, 248, 0.45)" : "rgba(248, 113, 113, 0.45)";
+  ctx.shadowBlur = 14;
+  ctx.fillText(`${Math.round(width)}×${Math.round(height)}`, center.x, center.y - 6);
+  ctx.restore();
+};
+
 const drawIsoRoomShowcase = (ctx, project, room) => {
   const corners = [
     project(room.x, room.y),
@@ -3609,6 +4329,32 @@ const drawIsoRoomShowcase = (ctx, project, room) => {
   const mid = theme.palette?.mid ?? theme.palette?.base ?? "#475569";
   const glyph = getRoomGlyph(room.type);
   const recentlyBuilt = isRoomRecentlyBuilt(room);
+  const wallGeometry = buildWallGeometry(corners, topCorners, room);
+
+  const drawWallFixtures = (wallId) => {
+    const geometry = wallGeometry[wallId];
+    if (!geometry) return;
+    const windows = (room.windows ?? []).filter((fixture) => fixture.wall === wallId);
+    windows.forEach((fixture) => {
+      const segment = sampleWallSegment(geometry, fixture.index);
+      if (!segment) return;
+      if (wallId === "south") {
+        return;
+      }
+      drawIsoWindowPanel(ctx, segment, accent);
+    });
+    const doors = (room.doors ?? []).filter((fixture) => fixture.wall === wallId);
+    doors.forEach((fixture) => {
+      const inset = wallId === "south" ? 0.25 : 0.18;
+      const segment = sampleWallSegment(geometry, fixture.index, inset);
+      if (!segment) return;
+      if (wallId === "south") {
+        drawIsoDoorway(ctx, segment, accent);
+      } else {
+        drawIsoDoorPanel(ctx, segment, accent);
+      }
+    });
+  };
 
   ctx.save();
   const shadowPoints = corners.map((point) => ({ x: point.x + 6, y: point.y + 10 }));
@@ -3628,7 +4374,7 @@ const drawIsoRoomShowcase = (ctx, project, room) => {
   ctx.strokeStyle = withAlpha(accent, 0.35);
   ctx.stroke();
   ctx.restore();
-  drawIsoWallWindows(ctx, corners[1], corners[2], topCorners[1], topCorners[2], accent, room.height);
+  drawWallFixtures("east");
 
   ctx.save();
   drawIsoPolygon(ctx, [corners[0], corners[3], topCorners[3], topCorners[0]]);
@@ -3640,7 +4386,7 @@ const drawIsoRoomShowcase = (ctx, project, room) => {
   ctx.strokeStyle = withAlpha(accent, 0.28);
   ctx.stroke();
   ctx.restore();
-  drawIsoWallWindows(ctx, corners[0], corners[3], topCorners[0], topCorners[3], accent, room.width);
+  drawWallFixtures("west");
 
   ctx.save();
   drawIsoPolygon(ctx, corners);
@@ -3668,6 +4414,9 @@ const drawIsoRoomShowcase = (ctx, project, room) => {
   ctx.stroke();
   ctx.restore();
 
+  drawWallFixtures("north");
+  drawWallFixtures("south");
+
   ctx.save();
   drawIsoPolygon(ctx, corners);
   const centerX = (corners[0].x + corners[2].x) / 2;
@@ -3678,8 +4427,6 @@ const drawIsoRoomShowcase = (ctx, project, room) => {
   ctx.fillStyle = glow;
   ctx.fill();
   ctx.restore();
-
-  drawIsoDoorway(ctx, corners[3], corners[2], accent);
 
   if (recentlyBuilt) {
     const elapsed = (state.stats?.tick ?? 0) - (room.builtAt ?? 0);
@@ -4162,45 +4909,43 @@ const renderShowcaseCanvas = (ctx) => {
     ctx.restore();
   }
 
-  const projector = createIsoProjector(width, height);
-  const tiles = [];
-  for (let y = 0; y < GRID_HEIGHT; y++) {
-    for (let x = 0; x < GRID_WIDTH; x++) {
-      tiles.push({ x, y, order: x + y });
-    }
+  const { project } = getIsoMapper();
+
+  const ownedParcels = state.properties.filter((parcel) => parcel.owned);
+  ownedParcels.forEach((parcel) => drawIsoParcelFloor(ctx, project, parcel));
+
+  const previewOverlay = buildPreviewState.active
+    ? {
+        x: buildPreviewState.x,
+        y: buildPreviewState.y,
+        width: buildPreviewState.width,
+        height: buildPreviewState.height,
+        valid: buildPreviewState.valid,
+      }
+    : buildHoverState.active
+    ? {
+        x: buildHoverState.x,
+        y: buildHoverState.y,
+        width: buildHoverState.width,
+        height: buildHoverState.height,
+        valid: buildHoverState.valid,
+      }
+    : null;
+
+  if (previewOverlay) {
+    drawIsoBuildOverlay(ctx, project, previewOverlay);
   }
-  tiles.sort((a, b) => a.order - b.order);
-  tiles.forEach(({ x, y }) =>
-    drawIsoTile(ctx, projector, x, y, {
-      locked: !isTileUnlocked(x, y),
-      occupant: state.grid[y][x],
-    })
-  );
 
   const sortedRooms = [...state.rooms].sort(
     (a, b) => a.x + a.y + a.height - (b.x + b.y + b.height)
   );
-  sortedRooms.forEach((room) => drawIsoRoomShowcase(ctx, projector, room));
+  sortedRooms.forEach((room) => drawIsoRoomShowcase(ctx, project, room));
 
-  drawIsoAgents(ctx, projector);
+  drawIsoAgents(ctx, project);
 
-  state.properties.forEach((parcel) => {
-    if (parcel.owned) return;
-    const points = [
-      projector(parcel.x, parcel.y),
-      projector(parcel.x + parcel.width, parcel.y),
-      projector(parcel.x + parcel.width, parcel.y + parcel.height),
-      projector(parcel.x, parcel.y + parcel.height),
-    ];
-    ctx.save();
-    drawIsoPolygon(ctx, points);
-    ctx.fillStyle = "rgba(15, 23, 42, 0.65)";
-    ctx.fill();
-    ctx.strokeStyle = "rgba(148, 197, 255, 0.35)";
-    ctx.setLineDash([6, 6]);
-    ctx.stroke();
-    ctx.restore();
-  });
+  state.properties
+    .filter((parcel) => !parcel.owned)
+    .forEach((parcel) => drawIsoLockedParcel(ctx, project, parcel));
 
   ctx.restore();
 
@@ -4310,6 +5055,23 @@ const updateStats = () => {
   if (elements.meters.plant) {
     elements.meters.plant.value = plantCare;
   }
+  if (elements.overviewSummary) {
+    if (elements.overviewSummary.cleanliness) {
+      elements.overviewSummary.cleanliness.textContent = `${Math.round(cleanliness)}%`;
+    }
+    if (elements.overviewSummary.efficiency) {
+      elements.overviewSummary.efficiency.textContent = `${Math.round(efficiency)}%`;
+    }
+    if (elements.overviewSummary.morale) {
+      elements.overviewSummary.morale.textContent = `${Math.round(morale)}%`;
+    }
+    if (elements.overviewSummary.grounds) {
+      elements.overviewSummary.grounds.textContent = `${Math.round(grounds)}%`;
+    }
+    if (elements.overviewSummary.plant) {
+      elements.overviewSummary.plant.textContent = `${Math.round(plantCare)}%`;
+    }
+  }
   if (elements.statEnvironment) {
     elements.statEnvironment.textContent = Math.round(environmentScore);
   }
@@ -4329,6 +5091,9 @@ const syncQueuePositions = () => {
     }
     const slot = getQueueSlotPosition(index);
     patient.queueIndex = index;
+    if (patient.intent?.type === "roam") {
+      return;
+    }
     if (distanceBetween(patient.position, slot) > 0.05) {
       patient.path = createPath(patient.position, slot);
     } else {
@@ -4340,6 +5105,299 @@ const syncQueuePositions = () => {
   });
 };
 
+const findPatientRoamSpot = (patient) => {
+  const queueIndexRaw = patient.queueIndex ?? state.queue.indexOf(patient);
+  const queueIndex = queueIndexRaw >= 0 ? queueIndexRaw : 0;
+  const slot = getQueueSlotPosition(queueIndex);
+  const baseX = clamp(Math.round(slot.x), 0, GRID_WIDTH - 1);
+  const baseY = clamp(Math.round(slot.y), 0, GRID_HEIGHT - 1);
+  const corridorRow = clamp(Math.round(CORRIDOR_Y), 0, GRID_HEIGHT - 1);
+  const radius = 4 + Math.min(queueIndex, 6);
+  const candidates = [];
+  for (let y = Math.max(0, baseY - radius); y <= Math.min(GRID_HEIGHT - 1, baseY + radius); y++) {
+    if (Math.abs(y - corridorRow) > 2) continue;
+    for (let x = Math.max(0, baseX - radius); x <= Math.min(GRID_WIDTH - 1, baseX + radius); x++) {
+      if (!isTileUnlocked(x, y)) continue;
+      if (state.grid[y][x]) continue;
+      const worldPoint = { x: x + 0.5, y: y + 0.5 };
+      const tooClose = state.patientsOnSite.some(
+        (other) => other !== patient && distanceBetween(other.position, worldPoint) < 0.6
+      );
+      if (tooClose) continue;
+      const distance = distanceBetween(slot, worldPoint);
+      candidates.push({ point: worldPoint, distance });
+    }
+  }
+  if (!candidates.length) {
+    return null;
+  }
+  candidates.sort((a, b) => a.distance - b.distance);
+  const sample = candidates.slice(0, Math.min(4, candidates.length));
+  const pick = sample[Math.floor(Math.random() * sample.length)];
+  return pick ? pick.point : null;
+};
+
+const updatePatientIntelligence = (patient, deltaSeconds) => {
+  if (patient.status !== "queuing") {
+    patient.intent = null;
+    return;
+  }
+  if (patient.intent?.type === "roam") {
+    if (patient.path?.length) {
+      return;
+    }
+    patient.intent.waitTimer = (patient.intent.waitTimer ?? (1.5 + Math.random() * 2.5)) - deltaSeconds;
+    if (patient.intent.waitTimer <= 0) {
+      const slot = getQueueSlotPosition(patient.queueIndex ?? 0);
+      patient.intent = { type: "return" };
+      patient.path = createPath(patient.position, slot);
+      patient.mood = patient.patience < 35 ? "anxious" : "focused";
+      patient.brainCooldown = 6 + Math.random() * 6;
+    }
+    return;
+  }
+  if (patient.intent?.type === "return") {
+    if (!patient.path?.length) {
+      patient.intent = null;
+      patient.mood = patient.patience < 40 ? "uneasy" : "calm";
+      patient.brainCooldown = 5 + Math.random() * 5;
+    }
+    return;
+  }
+  patient.brainCooldown = Math.max(0, (patient.brainCooldown ?? 0) - deltaSeconds);
+  if (patient.brainCooldown > 0) {
+    return;
+  }
+  patient.brainCooldown = 6 + Math.random() * 6;
+  const queueIndexRaw = patient.queueIndex ?? state.queue.indexOf(patient);
+  const queueIndex = queueIndexRaw >= 0 ? queueIndexRaw : 0;
+  const longQueue = state.queue.length > 2 && queueIndex >= 2;
+  const patienceLow = patient.patience < 45;
+  if ((longQueue || patienceLow) && Math.random() < 0.55) {
+    const roamSpot = findPatientRoamSpot(patient);
+    if (roamSpot) {
+      patient.intent = { type: "roam", target: roamSpot, waitTimer: null };
+      patient.path = createPath(patient.position, roamSpot);
+      patient.mood = patienceLow ? "anxious" : "restless";
+      return;
+    }
+  }
+  if (patienceLow) {
+    patient.mood = "impatient";
+  } else if (Math.random() < 0.2) {
+    patient.mood = "bored";
+  }
+};
+
+const findPatientById = (id) => {
+  if (id == null) return null;
+  return (
+    state.patientsOnSite.find((patient) => patient.id === id) ??
+    state.queue.find((patient) => patient.id === id) ??
+    state.activePatients.find((patient) => patient.id === id) ??
+    null
+  );
+};
+
+const getSelectedPatient = () => findPatientById(selectedPatientId);
+
+const getRoomDisplayName = (roomType) => {
+  if (!roomType) return "treatment room";
+  const blueprint = getBlueprint(roomType);
+  return blueprint?.name ?? roomType;
+};
+
+const formatPatientStatus = (patient) => {
+  switch (patient.status) {
+    case "arriving":
+      return "Checking in";
+    case "queuing": {
+      const index = patient.queueIndex ?? state.queue.indexOf(patient);
+      if (index > 0) {
+        return `Waiting • ${index} ahead`;
+      }
+      if (index === 0) {
+        return "Next in line";
+      }
+      return "Waiting in queue";
+    }
+    case "moving-to-room": {
+      const room = state.rooms.find((entry) => entry.id === patient.targetRoomId);
+      return `Heading to ${getRoomDisplayName(room?.type ?? patient.ailment?.room)}`;
+    }
+    case "in-treatment": {
+      const room = state.rooms.find((entry) => entry.id === patient.targetRoomId);
+      return `In treatment • ${getRoomDisplayName(room?.type ?? patient.ailment?.room)}`;
+    }
+    case "leaving":
+      return "Leaving hospital";
+    default:
+      return patient.status ? patient.status.replace(/-/g, " ") : "Waiting";
+  }
+};
+
+const buildPatientNotes = (patient) => {
+  if (!patient) return "";
+  if (patient.status === "in-treatment") {
+    const room = state.rooms.find((entry) => entry.id === patient.targetRoomId);
+    return `Currently receiving care inside ${getRoomDisplayName(room?.type ?? patient.ailment?.room)}.`;
+  }
+  if (patient.status === "moving-to-room") {
+    const room = state.rooms.find((entry) => entry.id === patient.targetRoomId);
+    return `Walking to ${getRoomDisplayName(room?.type ?? patient.ailment?.room)} for treatment.`;
+  }
+  if (patient.status === "leaving") {
+    return "Heading home after their visit.";
+  }
+  if (patient.intent?.type === "roam") {
+    return "Stretching their legs around the lobby to stay calm.";
+  }
+  if (patient.intent?.type === "return") {
+    return "Rejoining the queue after a short walk.";
+  }
+  if (patient.status === "queuing") {
+    const index = patient.queueIndex ?? state.queue.indexOf(patient);
+    if (index > 1) {
+      return `Passing the time with ${index} patients ahead of them.`;
+    }
+    if (index === 1) {
+      return "Almost ready for the next room.";
+    }
+    return "Standing by for their call into the room.";
+  }
+  if (patient.status === "arriving") {
+    return "Checking in with reception.";
+  }
+  return "Exploring the lobby while they wait.";
+};
+
+const refreshQueueSelectionStyles = () => {
+  if (!elements.patientQueue) return;
+  const items = elements.patientQueue.querySelectorAll("li[data-patient-id]");
+  items.forEach((item) => {
+    const id = Number.parseInt(item.dataset.patientId, 10);
+    item.classList.toggle("selected", id === selectedPatientId);
+  });
+};
+
+const updatePatientDetail = () => {
+  const detail = elements.patientDetail;
+  if (!detail?.panel) return;
+  const patient = getSelectedPatient();
+  if (!patient) {
+    detail.panel.hidden = true;
+    return;
+  }
+  seedPatientVitals(patient);
+  detail.panel.hidden = false;
+  detail.name.textContent = patient.name;
+  detail.status.textContent = formatPatientStatus(patient);
+  const moodLabel = (patient.mood ?? "calm").replace(/\b\w/g, (char) => char.toUpperCase());
+  if (detail.mood) {
+    detail.mood.textContent = moodLabel;
+  }
+  const profileColor = patient.profile?.color ?? "#f8fafc";
+  if (detail.profile) {
+    detail.profile.textContent = patient.profile?.label ?? "Standard";
+    detail.profile.style.color = profileColor;
+    detail.profile.style.borderColor = withAlpha(profileColor, 0.55);
+    detail.profile.style.backgroundColor = withAlpha(profileColor, 0.18);
+  }
+  const healthValue = Math.round(clamp(patient.health ?? 0, 0, 100));
+  if (detail.healthBar) {
+    detail.healthBar.value = healthValue;
+  }
+  if (detail.healthValue) {
+    detail.healthValue.textContent = `${healthValue}%`;
+  }
+  const diagnosisValue = Math.round(clamp(patient.diagnosisProgress ?? 0, 0, 100));
+  if (detail.diagnosisBar) {
+    detail.diagnosisBar.value = diagnosisValue;
+  }
+  if (detail.diagnosisValue) {
+    detail.diagnosisValue.textContent = `${diagnosisValue}%`;
+  }
+  const patienceValue = Math.round(Math.max(0, patient.patience ?? 0));
+  if (detail.patienceBar) {
+    detail.patienceBar.value = patienceValue;
+  }
+  if (detail.patienceValue) {
+    detail.patienceValue.textContent = patienceValue;
+  }
+  if (detail.ailment) {
+    detail.ailment.textContent = patient.ailment?.name ?? "Unknown condition";
+  }
+  let queueSummary = "";
+  if (patient.status === "queuing" || patient.status === "arriving") {
+    const index = patient.queueIndex ?? state.queue.indexOf(patient);
+    if (index >= 0) {
+      queueSummary = `Queue position ${index + 1} of ${state.queue.length}`;
+    } else {
+      queueSummary = "Waiting for placement in the queue";
+    }
+  } else if (patient.status === "moving-to-room") {
+    queueSummary = `Walking to ${getRoomDisplayName(patient.ailment?.room)}`;
+  } else if (patient.status === "leaving") {
+    queueSummary = "Exiting the hospital";
+  }
+  if (detail.queue) {
+    detail.queue.textContent = queueSummary;
+    detail.queue.hidden = !queueSummary;
+  }
+  const curesList = detail.cures;
+  if (curesList) {
+    curesList.innerHTML = "";
+    const history = Array.isArray(patient.cureHistory) ? patient.cureHistory : [];
+    if (!history.length) {
+      if (detail.curesEmpty) {
+        detail.curesEmpty.hidden = false;
+      }
+    } else {
+      history.slice(0, 4).forEach((entry) => {
+        const item = document.createElement("li");
+        const method = entry.method ? ` • ${entry.method}` : "";
+        const dayLabel = entry.day ? ` • Day ${entry.day}` : "";
+        item.textContent = `${entry.label ?? "Treatment"} • ¤${formatCurrency(entry.charge ?? 0)}${method}${dayLabel}`;
+        curesList.appendChild(item);
+      });
+      if (detail.curesEmpty) {
+        detail.curesEmpty.hidden = true;
+      }
+    }
+  }
+  if (detail.notes) {
+    detail.notes.textContent = buildPatientNotes(patient);
+  }
+  detail.panel.setAttribute("aria-label", `${patient.name} status card`);
+  refreshQueueSelectionStyles();
+};
+
+const setSelectedPatient = (patient) => {
+  if (!patient) {
+    clearSelectedPatient();
+    return;
+  }
+  selectedPatientId = patient.id;
+  seedPatientVitals(patient);
+  updatePatientDetail();
+};
+
+const clearSelectedPatient = () => {
+  selectedPatientId = null;
+  if (elements.patientDetail?.panel) {
+    elements.patientDetail.panel.hidden = true;
+  }
+  refreshQueueSelectionStyles();
+};
+
+const maintainSelectedPatient = () => {
+  if (!selectedPatientId) return;
+  const patient = findPatientById(selectedPatientId);
+  if (!patient) {
+    clearSelectedPatient();
+  }
+};
+
 const updateQueue = () => {
   elements.patientQueue.innerHTML = "";
   state.queue.forEach((patient) => {
@@ -4347,6 +5405,8 @@ const updateQueue = () => {
     if (patient.isEmergency) {
       li.classList.add("emergency");
     }
+    li.dataset.patientId = String(patient.id);
+    li.tabIndex = 0;
     const header = document.createElement("div");
     header.className = "queue-header";
     const nameSpan = document.createElement("span");
@@ -4376,6 +5436,17 @@ const updateQueue = () => {
     patience.textContent = `Patience ${Math.max(0, Math.round(patient.patience))}`;
     meta.appendChild(patience);
 
+    const mood = document.createElement("span");
+    mood.className = "queue-mood";
+    const intentLabel =
+      patient.intent?.type === "roam"
+        ? "exploring"
+        : patient.intent?.type === "return"
+        ? "rejoining"
+        : null;
+    mood.textContent = intentLabel ? `Mood ${patient.mood} • ${intentLabel}` : `Mood ${patient.mood}`;
+    meta.appendChild(mood);
+
     const estimate = document.createElement("span");
     const preview = getBillingPreview(patient);
     estimate.textContent = `Charge ¤${formatCurrency(preview.charge)} • ${preview.methodLabel}`;
@@ -4390,10 +5461,24 @@ const updateQueue = () => {
     meta.appendChild(estimate);
 
     li.append(header, meta);
+    li.addEventListener("click", () => setSelectedPatient(patient));
+    li.addEventListener("keydown", (event) => {
+      if (event.key === "Enter" || event.key === " ") {
+        event.preventDefault();
+        setSelectedPatient(patient);
+      }
+    });
+    if (patient.id === selectedPatientId) {
+      li.classList.add("selected");
+    }
     elements.patientQueue.appendChild(li);
   });
+  refreshQueueSelectionStyles();
   syncQueuePositions();
   renderHospitalCanvas();
+  if (selectedPatientId) {
+    updatePatientDetail();
+  }
 };
 
 const updateObjectives = () => {
@@ -4541,17 +5626,24 @@ const renderBuildMenuRooms = () => {
     button.type = "button";
     button.dataset.room = room.id;
     button.className = "build-card";
+    const art = renderEngine.createRoomCardArt(room.id);
     const roles = room.roleRequired?.length
       ? room.roleRequired.map(formatStaffRole).join(", ")
       : "No staff required";
-    button.innerHTML = `
-      <div class="build-card__body">
-        <strong>${room.name}</strong>
-        <span class="build-card__roles">${roles}</span>
-        <p>${room.description}</p>
-      </div>
-      <span class="build-card__cost">¤${formatCurrency(room.cost)}</span>
-    `;
+    const body = document.createElement("div");
+    body.className = "build-card__body";
+    const title = document.createElement("strong");
+    title.textContent = room.name;
+    const roleLabel = document.createElement("span");
+    roleLabel.className = "build-card__roles";
+    roleLabel.textContent = roles;
+    const desc = document.createElement("p");
+    desc.textContent = room.description;
+    body.append(title, roleLabel, desc);
+    const cost = document.createElement("span");
+    cost.className = "build-card__cost";
+    cost.textContent = `¤${formatCurrency(room.cost)}`;
+    button.append(art, body, cost);
     button.addEventListener("click", () => {
       selectedRoom = room;
       setDesignerBlueprint(room, { resetSelections: true });
@@ -4563,36 +5655,354 @@ const renderBuildMenuRooms = () => {
     }
     container.appendChild(button);
   });
+  renderLiveBuildPalette();
+};
+
+const renderLiveBuildPalette = () => {
+  const palette = elements.liveBuild?.palette;
+  if (!palette) return;
+  palette.innerHTML = "";
+  roomCatalog.forEach((room) => {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.dataset.room = room.id;
+    button.className = "live-build-room";
+    button.setAttribute("role", "radio");
+    button.setAttribute("aria-checked", "false");
+    button.setAttribute("aria-label", `${room.name} blueprint`);
+    const art = renderEngine.createRoomCardArt(room.id);
+    const label = document.createElement("div");
+    const title = document.createElement("strong");
+    title.textContent = room.name;
+    const meta = document.createElement("span");
+    meta.textContent = `¤${formatCurrency(room.cost)}`;
+    label.append(title, meta);
+    button.append(art, label);
+    button.addEventListener("click", () => {
+      selectedRoom = room;
+      setDesignerBlueprint(room, { resetSelections: true });
+      highlightBuildSelection(room.id);
+      updateBuildGuidance();
+    });
+    if (!designerState.editingRoomId && (selectedRoom?.id === room.id || designerState.blueprint?.id === room.id)) {
+      button.classList.add("selected");
+      button.setAttribute("aria-checked", "true");
+    }
+    palette.appendChild(button);
+  });
+};
+
+const renderBuildMenuStructure = () => {
+  const container = elements.buildMenuPanels?.structure;
+  if (!container) return;
+  container.innerHTML = "";
+
+  if (!state.rooms.length) {
+    const empty = document.createElement("p");
+    empty.className = "structure-empty";
+    empty.textContent = "Construct a room to manage doors and windows.";
+    container.appendChild(empty);
+    return;
+  }
+
+  let activeRoom = getActiveInteriorRoom();
+  if (!activeRoom) {
+    const firstRoom = state.rooms[0];
+    if (firstRoom) {
+      activeRoom = setActiveInteriorRoom(firstRoom.id);
+    }
+  }
+  activeRoom = ensureRoomStructure(activeRoom);
+  if (!activeRoom) {
+    const empty = document.createElement("p");
+    empty.className = "structure-empty";
+    empty.textContent = "Select a room to adjust its doors and windows.";
+    container.appendChild(empty);
+    return;
+  }
+
+  const selector = document.createElement("div");
+  selector.className = "structure-room-select";
+  const selectorLabel = document.createElement("label");
+  selectorLabel.setAttribute("for", "structure-room-select");
+  selectorLabel.textContent = "Active room";
+  const selectorControl = document.createElement("select");
+  selectorControl.id = "structure-room-select";
+  state.rooms.forEach((room) => {
+    const option = document.createElement("option");
+    option.value = room.id;
+    const blueprint = getBlueprint(room.type);
+    const coord = `${AXIS_LETTERS[room.x] ?? room.x + 1}${room.y + 1}`;
+    const status = !isRoomWallsClosed(room)
+      ? " – walls open"
+      : !room.doorInstalled
+      ? " – door needed"
+      : "";
+    option.textContent = `${blueprint?.name ?? room.type} • ${room.width}×${room.height} @ ${coord}${status}`;
+    if (room.id === activeRoom.id) {
+      option.selected = true;
+    }
+    selectorControl.appendChild(option);
+  });
+  selectorControl.addEventListener("change", (event) => {
+    setActiveInteriorRoom(event.target.value);
+    renderBuildMenuStructure();
+    renderBuildMenuInteriors();
+  });
+  selector.append(selectorLabel, selectorControl);
+  container.appendChild(selector);
+
+  const status = document.createElement("p");
+  status.className = "structure-status";
+  if (!isRoomWallsClosed(activeRoom)) {
+    status.textContent = "Complete the room footprint to enable door and window placement.";
+    container.appendChild(status);
+    return;
+  }
+  if (!activeRoom.doorInstalled) {
+    status.textContent = "Install a door along the front wall to complete the room.";
+  } else {
+    status.textContent = "Door installed. Add windows or continue to the Interiors tab for styling.";
+  }
+  container.appendChild(status);
+
+  const renderStructureList = (list, fixtures, onRemove) => {
+    if (!fixtures.length) {
+      const emptyItem = document.createElement("li");
+      emptyItem.className = "structure-list__empty";
+      emptyItem.textContent = "No entries yet.";
+      list.appendChild(emptyItem);
+      return;
+    }
+    fixtures.forEach((fixture, index) => {
+      const item = document.createElement("li");
+      item.className = "structure-list__item";
+      const label = document.createElement("span");
+      label.textContent = describeStructureLocation(activeRoom, fixture);
+      const remove = document.createElement("button");
+      remove.type = "button";
+      remove.className = "structure-list__remove";
+      remove.textContent = "Remove";
+      remove.addEventListener("click", () => onRemove(index));
+      item.append(label, remove);
+      list.appendChild(item);
+    });
+  };
+
+  const doorSection = document.createElement("section");
+  doorSection.className = "structure-section";
+  const doorHeader = document.createElement("div");
+  doorHeader.className = "structure-section__header";
+  const doorTitle = document.createElement("h4");
+  doorTitle.textContent = "Doors";
+  const doorButton = document.createElement("button");
+  doorButton.type = "button";
+  doorButton.className = "structure-section__action";
+  doorButton.textContent = "Add door";
+  if (isStructurePlacementActive() && buildFlowState.mode === "placing-door" && buildFlowState.activeRoomId === activeRoom.id) {
+    doorButton.disabled = true;
+  }
+  doorButton.addEventListener("click", () => {
+    setActiveInteriorRoom(activeRoom.id);
+    setStructurePlacementMode("placing-door", activeRoom.id);
+    renderBuildMenuStructure();
+  });
+  doorHeader.append(doorTitle, doorButton);
+  const doorList = document.createElement("ul");
+  doorList.className = "structure-list";
+  renderStructureList(doorList, activeRoom.doors ?? [], (index) => {
+    const removed = activeRoom.doors.splice(index, 1)[0];
+    activeRoom.doorInstalled = activeRoom.doors.length > 0;
+    renderHospitalCanvas();
+    renderBuildMenuStructure();
+    renderBuildMenuInteriors();
+    recalculateAmbience();
+    updateStats();
+    updateBuildTabStates();
+    if (removed) {
+      const blueprint = getBlueprint(activeRoom.type);
+      logEvent(
+        `${blueprint?.name ?? "Room"} door removed from ${describeStructureLocation(activeRoom, removed)}.`,
+        "neutral"
+      );
+    }
+    if (!activeRoom.doorInstalled) {
+      setStructurePlacementMode("placing-door", activeRoom.id);
+      setBuildMenuTab("structure");
+    } else {
+      updateBuildGuidance();
+    }
+  });
+  doorSection.append(doorHeader, doorList);
+  container.appendChild(doorSection);
+
+  const windowSection = document.createElement("section");
+  windowSection.className = "structure-section";
+  const windowHeader = document.createElement("div");
+  windowHeader.className = "structure-section__header";
+  const windowTitle = document.createElement("h4");
+  windowTitle.textContent = "Windows";
+  const windowButton = document.createElement("button");
+  windowButton.type = "button";
+  windowButton.className = "structure-section__action";
+  windowButton.textContent = "Add window";
+  if (isStructurePlacementActive() && buildFlowState.mode === "placing-window" && buildFlowState.activeRoomId === activeRoom.id) {
+    windowButton.disabled = true;
+  }
+  windowButton.addEventListener("click", () => {
+    setActiveInteriorRoom(activeRoom.id);
+    setStructurePlacementMode("placing-window", activeRoom.id);
+    renderBuildMenuStructure();
+  });
+  windowHeader.append(windowTitle, windowButton);
+  const windowList = document.createElement("ul");
+  windowList.className = "structure-list";
+  renderStructureList(windowList, activeRoom.windows ?? [], (index) => {
+    const removed = activeRoom.windows.splice(index, 1)[0];
+    renderHospitalCanvas();
+    renderBuildMenuStructure();
+    if (removed) {
+      const blueprint = getBlueprint(activeRoom.type);
+      logEvent(
+        `${blueprint?.name ?? "Room"} window removed from ${describeStructureLocation(activeRoom, removed)}.`,
+        "neutral"
+      );
+    }
+  });
+  windowSection.append(windowHeader, windowList);
+  container.appendChild(windowSection);
+
+  if (!activeRoom.doorInstalled) {
+    const lockNote = document.createElement("p");
+    lockNote.className = "structure-empty";
+    lockNote.textContent = "Install a door to unlock interior styling options.";
+    container.appendChild(lockNote);
+  }
 };
 
 const renderBuildMenuInteriors = () => {
   const container = elements.buildMenuPanels?.interiors;
   if (!container) return;
   container.innerHTML = "";
+
+  const completedRooms = state.rooms
+    .map((room) => ensureRoomStructure(room))
+    .filter((room) => isRoomReadyForInterior(room));
+
+  if (!completedRooms.length) {
+    const empty = document.createElement("p");
+    empty.className = "structure-empty";
+    empty.textContent = "Finish a room with a door to unlock interior customization.";
+    container.appendChild(empty);
+    return;
+  }
+
+  let activeRoom = getActiveInteriorRoom();
+  if (!isRoomReadyForInterior(activeRoom)) {
+    activeRoom = setActiveInteriorRoom(completedRooms[0].id);
+  }
+  activeRoom = ensureRoomStructure(activeRoom);
+  if (!activeRoom || !isRoomReadyForInterior(activeRoom)) {
+    const empty = document.createElement("p");
+    empty.className = "structure-empty";
+    empty.textContent = "Select a completed room to adjust its interior.";
+    container.appendChild(empty);
+    return;
+  }
+
+  designerState.interiorId = activeRoom.interiorId ?? designerState.interiorId;
+  if (elements.designer.theme) {
+    elements.designer.theme.value = designerState.interiorId;
+  }
+
+  const selector = document.createElement("div");
+  selector.className = "structure-room-select";
+  const selectorLabel = document.createElement("label");
+  selectorLabel.setAttribute("for", "interior-room-select");
+  selectorLabel.textContent = "Interior room";
+  const selectorControl = document.createElement("select");
+  selectorControl.id = "interior-room-select";
+  completedRooms.forEach((room) => {
+    const option = document.createElement("option");
+    option.value = room.id;
+    const blueprint = getBlueprint(room.type);
+    const coord = `${AXIS_LETTERS[room.x] ?? room.x + 1}${room.y + 1}`;
+    option.textContent = `${blueprint?.name ?? room.type} • ${room.width}×${room.height} @ ${coord}`;
+    if (room.id === activeRoom.id) {
+      option.selected = true;
+    }
+    selectorControl.appendChild(option);
+  });
+  selectorControl.addEventListener("change", (event) => {
+    setActiveInteriorRoom(event.target.value);
+    renderBuildMenuInteriors();
+  });
+  selector.append(selectorLabel, selectorControl);
+  container.appendChild(selector);
+
+  const status = document.createElement("p");
+  status.className = "structure-status";
+  status.textContent = "Interior ready. Apply themes to boost ambience and style.";
+  container.appendChild(status);
+
+  const themeSection = document.createElement("section");
+  themeSection.className = "structure-section";
+  const themeHeader = document.createElement("div");
+  themeHeader.className = "structure-section__header";
+  const themeTitle = document.createElement("h4");
+  themeTitle.textContent = "Interior themes";
+  themeHeader.appendChild(themeTitle);
+  themeSection.appendChild(themeHeader);
+
+  const themeGrid = document.createElement("div");
+  themeGrid.className = "structure-theme-grid";
   ROOM_INTERIOR_LIBRARY.forEach((theme) => {
     const button = document.createElement("button");
     button.type = "button";
     button.dataset.interior = theme.id;
     button.className = "build-chip";
-    button.innerHTML = `
-      <span class="build-chip__swatch" style="--swatch-base:${theme.palette.base}; --swatch-accent:${theme.palette.accent};"></span>
-      <span class="build-chip__label">${theme.label}</span>
-    `;
-    button.addEventListener("click", () => {
-      designerState.interiorId = theme.id;
-      if (elements.designer.theme) {
-        elements.designer.theme.value = theme.id;
-      }
-      updateDesignerSummary();
-      updateDesignerOptions();
-      container.querySelectorAll(".build-chip").forEach((chip) => chip.classList.remove("selected"));
-      button.classList.add("selected");
-    });
-    if (designerState.interiorId === theme.id) {
+    const art = document.createElement("span");
+    art.className = "build-chip__art";
+    const previewUrl = renderEngine.createInteriorPreviewDataUrl(theme);
+    if (previewUrl) {
+      art.style.backgroundImage = `url(${previewUrl})`;
+    }
+    art.setAttribute("aria-hidden", "true");
+    const textWrap = document.createElement("span");
+    textWrap.className = "build-chip__text";
+    const label = document.createElement("span");
+    label.className = "build-chip__label";
+    label.textContent = theme.label;
+    const meta = document.createElement("span");
+    meta.className = "build-chip__meta";
+    meta.textContent = `¤${formatCurrency(theme.cost)} build • Upkeep ¤${formatCurrency(theme.upkeep)}/day`;
+    textWrap.append(label, meta);
+    button.append(art, textWrap);
+    if (activeRoom.interiorId === theme.id) {
       button.classList.add("selected");
     }
-    container.appendChild(button);
+    button.addEventListener("click", () => {
+      if (activeRoom.interiorId === theme.id) {
+        return;
+      }
+      if (applyInteriorThemeToRoom(activeRoom, theme.id)) {
+        designerState.interiorId = theme.id;
+        if (elements.designer.theme) {
+          elements.designer.theme.value = theme.id;
+        }
+        renderBuildMenuInteriors();
+        renderRoomManagement();
+        recalculateAmbience();
+        updateDesignerSummary();
+        updateStats();
+        renderHospitalCanvas();
+      }
+    });
+    themeGrid.appendChild(button);
   });
+  themeSection.appendChild(themeGrid);
+
+  container.appendChild(themeSection);
 };
 
 const renderBuildMenuAmenities = () => {
@@ -4627,9 +6037,18 @@ const renderBuildMenuAmenities = () => {
   });
 };
 
+const isBuildTabEnabled = (tab) => {
+  const button = elements.buildMenuTabs?.find((candidate) => candidate.dataset.buildTab === tab);
+  return Boolean(button && !button.disabled);
+};
+
 const setBuildMenuTab = (tab) => {
   if (!elements.buildMenuPanels?.[tab]) {
     tab = "rooms";
+  }
+  if (!isBuildTabEnabled(tab)) {
+    const fallback = elements.buildMenuTabs?.find((button) => !button.disabled);
+    tab = fallback?.dataset.buildTab ?? "rooms";
   }
   buildMenuTab = tab;
   elements.buildMenuTabs?.forEach((button) => {
@@ -4646,11 +6065,48 @@ const setBuildMenuTab = (tab) => {
   }
 };
 
+const updateBuildTabStates = () => {
+  const hasRooms = state.rooms.length > 0;
+  const hasCompletedRooms = state.rooms.some((room) => isRoomReadyForInterior(room));
+  elements.buildMenuTabs?.forEach((button) => {
+    const tab = button.dataset.buildTab;
+    let disabled = false;
+    let title = "";
+    if (tab === "structure") {
+      disabled = !hasRooms;
+      title = disabled ? "Construct a room to manage its structure." : "";
+    } else if (tab === "interiors") {
+      disabled = !hasCompletedRooms;
+      title = disabled ? "Install a door to unlock interior styling." : "";
+    }
+    button.disabled = disabled;
+    button.classList.toggle("is-disabled", disabled);
+    button.setAttribute("aria-disabled", disabled ? "true" : "false");
+    if (disabled) {
+      button.setAttribute("tabindex", "-1");
+      button.setAttribute("aria-selected", "false");
+      if (title) {
+        button.title = title;
+      }
+    } else {
+      button.removeAttribute("tabindex");
+      if (title) {
+        button.removeAttribute("title");
+      }
+    }
+    if (!disabled && button.hasAttribute("title")) {
+      button.removeAttribute("title");
+    }
+  });
+  setBuildMenuTab(buildMenuTab);
+};
+
 const renderBuildOptions = () => {
   renderBuildMenuRooms();
+  renderBuildMenuStructure();
   renderBuildMenuInteriors();
   renderBuildMenuAmenities();
-  setBuildMenuTab(buildMenuTab);
+  updateBuildTabStates();
   if (!designerState.editingRoomId && designerState.blueprint) {
     highlightBuildSelection(designerState.blueprint.id);
   }
@@ -4680,18 +6136,105 @@ const getRoomCenter = (room) => ({
   y: room.y + room.height / 2,
 });
 
-const createPath = (start, end) => {
+const createPath = (start, end, options = {}) => {
   if (!start || !end) return [];
-  const path = [];
+  const allowRoomIds = new Set(
+    [options.allowRoomId, ...(Array.isArray(options.allowRoomIds) ? options.allowRoomIds : [])].filter(Boolean)
+  );
+  const startNode = {
+    x: clamp(Math.floor(start.x), 0, GRID_WIDTH - 1),
+    y: clamp(Math.floor(start.y), 0, GRID_HEIGHT - 1),
+  };
+  const endNode = {
+    x: clamp(Math.floor(end.x), 0, GRID_WIDTH - 1),
+    y: clamp(Math.floor(end.y), 0, GRID_HEIGHT - 1),
+  };
+  const startOccupant = state.grid[startNode.y]?.[startNode.x];
+  if (startOccupant?.id) {
+    allowRoomIds.add(startOccupant.id);
+  }
+
+  const walkable = (x, y) => {
+    if (x < 0 || y < 0 || x >= GRID_WIDTH || y >= GRID_HEIGHT) return false;
+    if (!isTileUnlocked(x, y)) return false;
+    const occupant = state.grid[y][x];
+    if (!occupant) return true;
+    return allowRoomIds.has(occupant.id);
+  };
+
+  const key = (node) => `${node.x},${node.y}`;
+  const heuristic = (a, b) => Math.abs(a.x - b.x) + Math.abs(a.y - b.y);
+
+  if (!walkable(startNode.x, startNode.y) || !walkable(endNode.x, endNode.y)) {
+    allowRoomIds.add(state.grid[endNode.y]?.[endNode.x]?.id ?? "");
+  }
+
+  const open = [startNode];
+  const cameFrom = new Map();
+  const gScore = new Map([[key(startNode), 0]]);
+  const fScore = new Map([[key(startNode), heuristic(startNode, endNode)]]);
+
+  const nodeInOpen = (node) => open.some((entry) => entry.x === node.x && entry.y === node.y);
+
+  while (open.length) {
+    open.sort((a, b) => (fScore.get(key(a)) ?? Infinity) - (fScore.get(key(b)) ?? Infinity));
+    const current = open.shift();
+    if (current.x === endNode.x && current.y === endNode.y) {
+      const pathNodes = [];
+      let cursorKey = key(current);
+      let cursor = current;
+      while (cameFrom.has(cursorKey)) {
+        pathNodes.unshift(cursor);
+        cursor = cameFrom.get(cursorKey);
+        cursorKey = key(cursor);
+      }
+      const path = [];
+      let lastPoint = { ...start };
+      pathNodes.forEach((node) => {
+        const center = { x: node.x + 0.5, y: node.y + 0.5 };
+        if (distanceBetween(lastPoint, center) > 0.01) {
+          path.push(center);
+          lastPoint = center;
+        }
+      });
+      if (distanceBetween(lastPoint, end) > 0.01) {
+        path.push({ ...end });
+      }
+      return path;
+    }
+
+    const neighbors = [
+      { x: current.x + 1, y: current.y },
+      { x: current.x - 1, y: current.y },
+      { x: current.x, y: current.y + 1 },
+      { x: current.x, y: current.y - 1 },
+    ];
+    neighbors.forEach((neighbor) => {
+      if (!walkable(neighbor.x, neighbor.y)) {
+        return;
+      }
+      const tentativeG = (gScore.get(key(current)) ?? Infinity) + 1;
+      const neighborKey = key(neighbor);
+      if (tentativeG < (gScore.get(neighborKey) ?? Infinity)) {
+        cameFrom.set(neighborKey, current);
+        gScore.set(neighborKey, tentativeG);
+        fScore.set(neighborKey, tentativeG + heuristic(neighbor, endNode));
+        if (!nodeInOpen(neighbor)) {
+          open.push(neighbor);
+        }
+      }
+    });
+  }
+
+  const fallback = [];
   const corner = { x: end.x, y: start.y };
-  const segments = [corner, end];
-  segments.forEach((point) => {
+  [corner, end].forEach((point) => {
     if (distanceBetween(start, point) > 0.01) {
-      path.push({ x: point.x, y: point.y });
+      fallback.push({ x: point.x, y: point.y });
       start = point;
     }
   });
-  return path;
+  return fallback;
 };
 
 const stepAgent = (agent, speed, deltaSeconds = 1) => {
@@ -4718,12 +6261,12 @@ const stepAgent = (agent, speed, deltaSeconds = 1) => {
   return false;
 };
 
-const setAgentDestination = (agent, destination) => {
+const setAgentDestination = (agent, destination, options = {}) => {
   if (!agent.position) {
     agent.position = { ...getEntrancePosition() };
   }
   agent.destination = destination ? { ...destination } : null;
-  agent.path = destination ? createPath(agent.position, destination) : [];
+  agent.path = destination ? createPath(agent.position, destination, options) : [];
 };
 
 const countStaffByRole = (role) => state.staff.filter((member) => member.role === role).length;
@@ -5007,6 +6550,43 @@ const readSaveSlot = (slot) => {
 };
 
 const isLotOverviewOpen = () => Boolean(elements.lotOverview?.modal?.classList.contains("open"));
+const isHospitalOverviewOpen = () =>
+  Boolean(elements.hospitalOverview?.modal?.classList.contains("open"));
+
+const renderHospitalOverviewModal = () => {
+  const list = elements.hospitalOverview?.metrics;
+  if (!list) return;
+  const roomsBuilt = state.rooms.length;
+  const staffCount = state.staff.length;
+  const patientsOnSite = state.patientsOnSite.length;
+  const activeTreatments = state.activePatients.length;
+  const queueLength = state.queue.length;
+  const emergencyCount = state.queue.filter((patient) => patient.isEmergency).length;
+  const averagePatience = queueLength
+    ? Math.round(
+        state.queue.reduce((acc, patient) => acc + Math.max(0, patient.patience ?? 0), 0) /
+          queueLength
+      )
+    : 0;
+  const averageHealth = patientsOnSite
+    ? Math.round(
+        state.patientsOnSite.reduce((acc, patient) => {
+          seedPatientVitals(patient);
+          return acc + (patient.health ?? 0);
+        }, 0) / patientsOnSite
+      )
+    : 0;
+  list.innerHTML = `
+    <li><span>Rooms built</span><strong>${roomsBuilt}</strong></li>
+    <li><span>Staff on duty</span><strong>${staffCount}</strong></li>
+    <li><span>Patients on site</span><strong>${patientsOnSite}</strong></li>
+    <li><span>Active treatments</span><strong>${activeTreatments}</strong></li>
+    <li><span>Queue length</span><strong>${queueLength}</strong></li>
+    <li><span>Emergency cases</span><strong>${emergencyCount}</strong></li>
+    <li><span>Avg patience</span><strong>${averagePatience}%</strong></li>
+    <li><span>Avg health</span><strong>${averageHealth}%</strong></li>
+  `;
+};
 
 const openLotOverviewMenu = () => {
   if (!elements.lotOverview?.modal) return;
@@ -5031,7 +6611,7 @@ const closeLotOverviewMenu = () => {
   if (!isLotOverviewOpen()) return;
   elements.lotOverview.modal.classList.remove("open");
   elements.lotOverview.modal.setAttribute("aria-hidden", "true");
-  if (!isSaveMenuOpen()) {
+  if (!isSaveMenuOpen() && !isHospitalOverviewOpen()) {
     document.body.classList.remove("modal-open");
   }
   const focusTarget =
@@ -5049,6 +6629,60 @@ const setupLotOverviewMenu = () => {
   elements.lotOverview?.modal
     ?.querySelectorAll("[data-close-lot-overview]")
     .forEach((button) => button.addEventListener("click", () => closeLotOverviewMenu()));
+};
+
+const openHospitalOverviewMenu = () => {
+  if (!elements.hospitalOverview?.modal) return;
+  if (isHospitalOverviewOpen()) {
+    renderHospitalOverviewModal();
+    return;
+  }
+  updateStats();
+  renderHospitalOverviewModal();
+  elements.hospitalOverview.modal.classList.add("open");
+  elements.hospitalOverview.modal.setAttribute("aria-hidden", "false");
+  document.body.classList.add("modal-open");
+  lastFocusedBeforeHospitalOverview =
+    document.activeElement instanceof HTMLElement ? document.activeElement : null;
+  const focusTarget =
+    elements.hospitalOverview.modal.querySelector("#hospital-overview-title") ??
+    elements.hospitalOverview.modal.querySelector("[data-close-hospital-overview]");
+  focusTarget?.focus();
+};
+
+const closeHospitalOverviewMenu = () => {
+  if (!elements.hospitalOverview?.modal) return;
+  if (!isHospitalOverviewOpen()) return;
+  elements.hospitalOverview.modal.classList.remove("open");
+  elements.hospitalOverview.modal.setAttribute("aria-hidden", "true");
+  if (!isSaveMenuOpen() && !isLotOverviewOpen()) {
+    document.body.classList.remove("modal-open");
+  }
+  const focusTarget =
+    lastFocusedBeforeHospitalOverview &&
+    typeof lastFocusedBeforeHospitalOverview.focus === "function"
+      ? lastFocusedBeforeHospitalOverview
+      : elements.hospitalOverview?.openButton;
+  focusTarget?.focus();
+  lastFocusedBeforeHospitalOverview = null;
+};
+
+const setupHospitalOverviewMenu = () => {
+  if (elements.hospitalOverview?.openButton) {
+    elements.hospitalOverview.openButton.addEventListener("click", () => openHospitalOverviewMenu());
+  }
+  elements.hospitalOverview?.modal
+    ?.querySelectorAll("[data-close-hospital-overview]")
+    .forEach((button) => button.addEventListener("click", () => closeHospitalOverviewMenu()));
+};
+
+const setupPatientDetail = () => {
+  if (elements.patientDetail?.panel) {
+    elements.patientDetail.panel.hidden = true;
+  }
+  if (elements.patientDetail?.close) {
+    elements.patientDetail.close.addEventListener("click", () => clearSelectedPatient());
+  }
 };
 
 const isSaveMenuOpen = () => Boolean(elements.save?.modal?.classList.contains("open"));
@@ -5107,6 +6741,7 @@ const applySaveSnapshot = (snapshot) => {
     if (typeof room.builtAt !== "number") {
       room.builtAt = 0;
     }
+    ensureRoomStructure(room);
   });
   state.staff = deepClone(payload.staff ?? []);
   state.candidates = deepClone(payload.candidates ?? []);
@@ -5117,10 +6752,11 @@ const applySaveSnapshot = (snapshot) => {
     const base = queueMap.get(patient.id);
     if (base) {
       Object.assign(base, patient);
+      seedPatientVitals(base);
       return base;
     }
-    queueMap.set(patient.id, patient);
-    return patient;
+    queueMap.set(patient.id, seedPatientVitals(patient));
+    return queueMap.get(patient.id);
   };
   state.patientsOnSite = (payload.patientsOnSite ?? state.queue).map((patient) => hydratePatient(patient)).filter(Boolean);
   state.activePatients = (payload.activePatients ?? [])
@@ -5612,9 +7248,14 @@ const placeRoomAt = (x, y, layout, { fromDrag = false } = {}) => {
     y,
     severityCapacity: Math.max(0, Math.round((blueprint.baseSeverity ?? 0) + preview.severityBoost)),
     builtAt: state.stats?.tick ?? 0,
+    doors: [],
+    windows: [],
+    wallsComplete: true,
+    doorInstalled: false,
   };
   occupyRoomFootprint(room);
   state.rooms.push(room);
+  ensureRoomStructure(room);
   state.stats.cash -= preview.totalCost;
   state.stats.expensesToday += preview.totalCost;
   state.stats.reputation = clamp(
@@ -5638,15 +7279,135 @@ const placeRoomAt = (x, y, layout, { fromDrag = false } = {}) => {
     )} with ${machines.length} machines and ${decorations.length} decor upgrades.`,
     "positive"
   );
-  if (elements.blueprintFootnote) {
+  setActiveInteriorRoom(room.id);
+  setStructurePlacementMode("placing-door", room.id);
+  renderBuildMenuStructure();
+  renderBuildMenuInteriors();
+  updateBuildTabStates();
+  setBuildMenuTab("structure");
+  if (elements.liveBuild?.footnote) {
     const followUp = fromDrag
       ? "Drag another footprint or press Esc to cancel."
       : "Click another starting tile or press Esc to cancel.";
-    elements.blueprintFootnote.textContent = `${blueprint.name} placed at plot ${coordLabel} covering ${
+    elements.liveBuild.footnote.textContent = `${blueprint.name} placed at plot ${coordLabel} covering ${
       footprint.width
     }×${footprint.height}. ${followUp}`;
   }
   return true;
+};
+
+const establishStartingRoom = ({
+  type,
+  x,
+  y,
+  width,
+  height,
+  interiorId,
+  machines = ["standard-kit"],
+  decorations = [],
+}) => {
+  const blueprint = getBlueprint(type);
+  if (!blueprint) return null;
+  const layout = createCustomLayoutOption(width, height);
+  if (!canPlaceFootprint(x, y, layout.width, layout.height)) {
+    return null;
+  }
+  const theme = getInteriorTheme(interiorId);
+  const interior = theme?.id ?? blueprint.designProfile?.interiors?.[0] ?? ROOM_INTERIOR_LIBRARY[0].id;
+  const normalizedMachines = machines.length ? machines.slice() : ["standard-kit"];
+  if (!normalizedMachines.includes("standard-kit")) {
+    normalizedMachines.unshift("standard-kit");
+  }
+  const normalizedDecor = decorations.slice();
+  const preview = summarizeRoomDesign({
+    blueprint,
+    sizeId: layout.id,
+    layoutOverride: layout,
+    interiorId: interior,
+    machines: normalizedMachines,
+    decorations: normalizedDecor,
+  });
+  const defaultDoorIndex = Math.min(layout.width - 1, Math.max(0, Math.floor(layout.width / 2)));
+  const defaultWindowIndex = Math.min(layout.height - 1, Math.max(0, Math.floor(layout.height / 2)));
+  const room = {
+    id: `room-${type}-${Math.random().toString(36).slice(2, 8)}`,
+    type,
+    name: blueprint.name,
+    sizeId: layout.id,
+    interiorId: interior,
+    machines: [...normalizedMachines],
+    decorations: [...normalizedDecor],
+    width: layout.width,
+    height: layout.height,
+    x,
+    y,
+    baseCost: blueprint.cost,
+    costInvested: preview.totalCost,
+    upkeep: preview.upkeep,
+    severityCapacity: Math.max(
+      0,
+      Math.round((blueprint.baseSeverity ?? 0) + (preview.severityBoost ?? 0))
+    ),
+    builtAt: -(NEW_ROOM_HIGHLIGHT_TICKS * 2),
+    doors: layout.width > 0 ? [{ wall: "south", index: defaultDoorIndex }] : [],
+    windows:
+      layout.height > 0
+        ? [
+            { wall: "west", index: defaultWindowIndex },
+            { wall: "east", index: defaultWindowIndex },
+          ]
+        : [],
+    wallsComplete: true,
+    doorInstalled: true,
+  };
+  ensureRoomStructure(room);
+  occupyRoomFootprint(room);
+  state.rooms.push(room);
+  return room;
+};
+
+const seedBaseHospital = () => {
+  if (state.rooms.length > 0) {
+    return;
+  }
+  const starters = [
+    {
+      type: "reception",
+      x: 1,
+      y: 1,
+      width: 3,
+      height: 3,
+      interiorId: "vibrant",
+      decorations: ["calming-plants"],
+    },
+    {
+      type: "gp",
+      x: 5,
+      y: 1,
+      width: 3,
+      height: 3,
+      interiorId: "sterile",
+      machines: ["standard-kit", "advanced-diagnostics"],
+    },
+    {
+      type: "pharmacy",
+      x: 1,
+      y: 4,
+      width: 3,
+      height: 2,
+      interiorId: "modern",
+      decorations: ["hydration-station"],
+    },
+    {
+      type: "triage",
+      x: 5,
+      y: 4,
+      width: 3,
+      height: 2,
+      interiorId: "nature",
+    },
+  ];
+  starters.forEach((config) => establishStartingRoom(config));
 };
 
 const handleBuildClick = (x, y) => {
@@ -5724,6 +7485,26 @@ const evaluateObjectives = () => {
   updateStats();
 };
 
+const seedPatientVitals = (patient) => {
+  if (!patient) return patient;
+  if (typeof patient.health !== "number" || Number.isNaN(patient.health)) {
+    const base = patient.isEmergency ? 52 + Math.random() * 18 : 68 + Math.random() * 20;
+    patient.health = clamp(base, 10, 100);
+  } else {
+    patient.health = clamp(patient.health, 0, 100);
+  }
+  if (typeof patient.diagnosisProgress !== "number" || Number.isNaN(patient.diagnosisProgress)) {
+    const base = patient.isEmergency ? 38 + Math.random() * 28 : 55 + Math.random() * 25;
+    patient.diagnosisProgress = clamp(base, 5, 95);
+  } else {
+    patient.diagnosisProgress = clamp(patient.diagnosisProgress, 0, 100);
+  }
+  if (!Array.isArray(patient.cureHistory)) {
+    patient.cureHistory = [];
+  }
+  return patient;
+};
+
 const createPatient = ({ ailment = randomFrom(ailments), emergency = false } = {}) => {
   const profile = randomFrom(billingProfiles);
   let patience = emergency ? 140 : 100;
@@ -5747,7 +7528,7 @@ const createPatient = ({ ailment = randomFrom(ailments), emergency = false } = {
   if (hasRoomBuilt("zen")) {
     patience += 3;
   }
-  return {
+  const patient = {
     id: patientIdCounter++,
     name: randomFrom(patientNames),
     ailment,
@@ -5761,7 +7542,10 @@ const createPatient = ({ ailment = randomFrom(ailments), emergency = false } = {
     mood: "calm",
     targetRoomId: null,
     treatmentTicks: 0,
+    intent: null,
+    brainCooldown: 2 + Math.random() * 4,
   };
+  return seedPatientVitals(patient);
 };
 
 const spawnPatient = ({ emergency = false, ailment, announce = emergency } = {}) => {
@@ -5826,7 +7610,9 @@ const processQueue = () => {
   patient.status = "moving-to-room";
   patient.targetRoomId = treatmentRoom.id;
   patient.mood = patient.isEmergency ? "urgent" : "hopeful";
-  patient.path = createPath(patient.position, getRoomDoorPosition(treatmentRoom));
+  patient.path = createPath(patient.position, getRoomDoorPosition(treatmentRoom), {
+    allowRoomId: treatmentRoom.id,
+  });
   patient.treatmentTicks = TREATMENT_DURATION_TICKS;
   state.activePatients.push(patient);
   syncQueuePositions();
@@ -5872,6 +7658,19 @@ const completeTreatment = (patient, treatmentRoom) => {
     addInstallmentPlan(outcome.plan);
   }
   recordBilling(patient, outcome);
+  const blueprint = getBlueprint(treatmentRoom.type);
+  patient.health = clamp((patient.health ?? 60) + 30, 0, 100);
+  patient.diagnosisProgress = 100;
+  patient.cureHistory = Array.isArray(patient.cureHistory) ? patient.cureHistory : [];
+  patient.cureHistory.unshift({
+    label: blueprint?.name ?? treatmentRoom.type,
+    charge: outcome.charge,
+    method: outcome.methodLabel,
+    day: state.stats.day,
+  });
+  if (patient.cureHistory.length > 5) {
+    patient.cureHistory.length = 5;
+  }
   let logMessage = `${patient.name} treated for ${patient.ailment.name} (${patient.profile.label}). Charge ¤${formatCurrency(
     outcome.charge
   )} via ${outcome.methodLabel}.`;
@@ -5899,10 +7698,23 @@ const updatePatientAgents = (deltaSeconds = 1, { progressSimulation = true } = {
     switch (patient.status) {
       case "arriving":
       case "queuing": {
+        if (progressSimulation) {
+          updatePatientIntelligence(patient, deltaSeconds);
+        }
         if (patient.path?.length) {
           const arrived = stepAgent(patient, AGENT_PATIENT_SPEED * 0.85, deltaSeconds);
-          if (arrived && patient.status === "arriving") {
-            patient.status = "queuing";
+          if (arrived) {
+            if (patient.status === "arriving") {
+              patient.status = "queuing";
+            }
+            if (patient.intent?.type === "roam") {
+              patient.intent.waitTimer =
+                patient.intent.waitTimer ?? (1.5 + Math.random() * 2.5);
+            } else if (patient.intent?.type === "return") {
+              patient.intent = null;
+              patient.mood = patient.patience < 40 ? "uneasy" : "calm";
+              patient.brainCooldown = 5 + Math.random() * 5;
+            }
           }
         }
         break;
@@ -5916,7 +7728,7 @@ const updatePatientAgents = (deltaSeconds = 1, { progressSimulation = true } = {
         if (!patient.path?.length) {
           const center = getRoomCenter(room);
           if (distanceBetween(patient.position, center) > 0.05) {
-            patient.path = createPath(patient.position, center);
+            patient.path = createPath(patient.position, center, { allowRoomId: room.id });
           } else if (progressSimulation) {
             patient.status = "in-treatment";
           }
@@ -5956,6 +7768,7 @@ const updatePatientAgents = (deltaSeconds = 1, { progressSimulation = true } = {
     }
     return true;
   });
+  maintainSelectedPatient();
 };
 
 const getStaffIdleSpot = (index) => ({
@@ -6039,7 +7852,7 @@ const updateStaffAgents = (deltaSeconds = 1, { progressSimulation = true } = {})
       agent.patrolIndex = (agent.patrolIndex + 1) % Math.max(1, coverRooms.length);
       agent.status = "moving";
       agent.targetRoomId = target.id;
-      setAgentDestination(agent, getRoomCenter(target));
+      setAgentDestination(agent, getRoomCenter(target), { allowRoomId: target.id });
       return;
     }
     agent.status = "idle";
@@ -6068,6 +7881,7 @@ const handlePatientPatience = () => {
   const snackSupport = getTotalAmenityCount("snack");
   const hydrationSupport = getTotalAmenityCount("hydration");
   state.queue = state.queue.filter((patient) => {
+    seedPatientVitals(patient);
     let patienceDrop = patient.isEmergency ? 6 : 4;
     if (triageSupport) {
       patienceDrop -= 1;
@@ -6108,6 +7922,31 @@ const handlePatientPatience = () => {
     patient.patience += state.ambience.welfare * 0.3;
     patient.patience += state.ambience.morale * 0.15;
     patient.patience = clamp(patient.patience, 0, 180);
+    let healthDrop = patient.isEmergency ? 1.4 : 0.9;
+    if (triageSupport) {
+      healthDrop -= 0.35;
+    }
+    if (zenSupport) {
+      healthDrop -= 0.2;
+    }
+    if (snackSupport) {
+      healthDrop -= Math.min(0.3, snackSupport * 0.05);
+    }
+    if (hydrationSupport) {
+      healthDrop -= Math.min(0.5, hydrationSupport * 0.08);
+    }
+    healthDrop -= state.ambience.welfare * 0.05;
+    healthDrop = Math.max(0.1, healthDrop);
+    patient.health = clamp((patient.health ?? 70) - healthDrop, 0, 100);
+    const diagnosisGain = triageSupport ? 1.4 : patient.isEmergency ? 0.9 : 0.7;
+    if (patient.diagnosisProgress < 95) {
+      patient.diagnosisProgress = clamp(patient.diagnosisProgress + diagnosisGain, 0, 95);
+    }
+    if (patient.health < 25 && patient.mood !== "upset") {
+      patient.mood = "frail";
+    } else if (patient.health < 45 && ["calm", "focused"].includes(patient.mood)) {
+      patient.mood = "uneasy";
+    }
     if (patient.patience <= 0) {
       changed = true;
       let penalty = patient.isEmergency ? 4 : 2;
@@ -6385,6 +8224,12 @@ const tick = () => {
   updateDailyReport();
   updateStats();
   updateFinancePanels();
+  if (isHospitalOverviewOpen()) {
+    renderHospitalOverviewModal();
+  }
+  if (selectedPatientId) {
+    updatePatientDetail();
+  }
   renderHospitalCanvas();
   if (state.stats.tick % DAY_TICKS === 0) {
     payExpenses();
@@ -6415,6 +8260,9 @@ const animateHospitalView = (timestamp) => {
   updatePatientAgents(deltaSeconds, { progressSimulation: false });
   updateStaffAgents(deltaSeconds, { progressSimulation: false });
   renderHospitalCanvas();
+  if (selectedPatientId) {
+    updatePatientDetail();
+  }
   requestAnimationFrame(animateHospitalView);
 };
 
@@ -6510,7 +8358,8 @@ const setupDesignerControls = () => {
   if (size) {
     size.addEventListener("change", (event) => {
       designerState.sizeId = event.target.value;
-      updateDesignerSummary();
+      enforceDesignerCapacities();
+      updateDesignerOptions();
       updateBuildGuidance();
     });
   }
@@ -6534,13 +8383,18 @@ const setupDesignerControls = () => {
 };
 
 const init = () => {
+  seedBaseHospital();
   setupCanvas();
-  setupGrid();
-  updateGrid();
+  if (elements.grid) {
+    setupGrid();
+    updateGrid();
+  }
   setupViewToggle();
   setupZoomControls();
   setupSaveMenu();
   setupLotOverviewMenu();
+  setupHospitalOverviewMenu();
+  setupPatientDetail();
   setupDesignerControls();
   updateDesignerOptions();
   updateDesignerSummary();
@@ -6574,6 +8428,11 @@ const init = () => {
       return;
     }
     if (event.key === "Escape") {
+      if (isHospitalOverviewOpen()) {
+        event.preventDefault();
+        closeHospitalOverviewMenu();
+        return;
+      }
       if (isLotOverviewOpen()) {
         event.preventDefault();
         closeLotOverviewMenu();
@@ -6584,6 +8443,19 @@ const init = () => {
         closeSaveMenu();
         return;
       }
+      if (selectedPatientId) {
+        event.preventDefault();
+        clearSelectedPatient();
+        return;
+      }
+      if (isStructurePlacementActive()) {
+        event.preventDefault();
+        setStructurePlacementMode("idle");
+        renderBuildMenuStructure();
+        renderBuildMenuInteriors();
+        updateBuildTabStates();
+        return;
+      }
       if (cancelBuildPreview()) {
         event.preventDefault();
         return;
@@ -6591,7 +8463,9 @@ const init = () => {
       clearBuildSelection();
     }
   });
-  window.addEventListener("pointermove", handleGridPointerMove);
+  if (elements.grid) {
+    window.addEventListener("pointermove", handleGridPointerMove);
+  }
   window.addEventListener("pointerup", handleGlobalPointerUp);
   window.addEventListener("pointercancel", handleGlobalPointerCancel);
   window.addEventListener("resize", () => {
