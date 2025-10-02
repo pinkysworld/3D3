@@ -109,6 +109,20 @@
             </button>
           </div>
         </div>
+        <div class="menu-block">
+          <h2 class="menu-heading">Game</h2>
+          <div class="menu-options">
+            <button
+              class="menu-option"
+              data-modal="save"
+              data-tab-target="*"
+              id="open-save-menu"
+              type="button"
+            >
+              Save &amp; Load
+            </button>
+          </div>
+        </div>
       </aside>
 
       <section class="sidebar tab-content" aria-label="Game controls">
@@ -174,7 +188,40 @@
             <ul id="property-owned" class="property-owned"></ul>
             <div id="property-market" class="property-market"></div>
           </section>
-          <div class="build-options" id="build-options"></div>
+          <div class="build-menu" id="build-menu">
+            <div class="build-menu__tabs" role="tablist" aria-label="Build categories">
+              <button
+                type="button"
+                class="build-menu__tab active"
+                data-build-tab="rooms"
+                role="tab"
+                aria-selected="true"
+              >
+                Rooms
+              </button>
+              <button
+                type="button"
+                class="build-menu__tab"
+                data-build-tab="interiors"
+                role="tab"
+                aria-selected="false"
+              >
+                Interiors
+              </button>
+              <button
+                type="button"
+                class="build-menu__tab"
+                data-build-tab="amenities"
+                role="tab"
+                aria-selected="false"
+              >
+                Amenities
+              </button>
+            </div>
+            <div class="build-menu__panel active" id="build-menu-rooms" role="tabpanel"></div>
+            <div class="build-menu__panel" id="build-menu-interiors" role="tabpanel" aria-hidden="true"></div>
+            <div class="build-menu__panel" id="build-menu-amenities" role="tabpanel" aria-hidden="true"></div>
+          </div>
           <section id="panel-designer" class="designer-panel" aria-label="Room designer">
             <h3>Room Designer</h3>
             <div class="designer-row">
@@ -232,11 +279,24 @@
       <section class="playfield" aria-label="Hospital layout">
         <div class="blueprint-wrapper" aria-label="Construction blueprint">
           <header class="blueprint-header">
-            <h2>Hospital Blueprint</h2>
+            <h2>Pulse Point Live Hospital</h2>
             <p>
-              Select a room from the Build tab, then click an empty tile on the grid to construct it.
-              Coordinates help you map out the hospital wings just like a real blueprint.
+              Watch the campus hum in real time as patients and staff flow between rooms. Toggle back to the
+              construction blueprint whenever you need precise tile-by-tile planning.
             </p>
+            <div class="view-switcher" role="radiogroup" aria-label="Hospital view">
+              <button class="view-switcher__button" type="button" data-view-mode="blueprint" aria-pressed="false">
+                Blueprint
+              </button>
+              <button
+                class="view-switcher__button active"
+                type="button"
+                data-view-mode="showcase"
+                aria-pressed="true"
+              >
+                Live Hospital
+              </button>
+            </div>
             <div class="blueprint-legend" aria-hidden="true">
               <span><span class="legend-swatch empty"></span> Empty plot</span>
               <span><span class="legend-swatch buildable"></span> Build target</span>
@@ -253,7 +313,8 @@
             </div>
           </div>
           <div id="blueprint-footnote" class="blueprint-footnote">
-            Pick a room on the Build tab to start construction. Expand the campus by purchasing parcels in Hospital Grounds.
+            Pick a room on the Build tab to start construction. Expand the campus by purchasing parcels in Hospital
+            Grounds.
           </div>
         </div>
         <canvas
@@ -318,5 +379,22 @@
   </template>
 
   <script src="main.js" type="module"></script>
+
+  <div id="save-modal" class="save-menu" aria-hidden="true">
+    <div class="save-menu__backdrop" data-close-save></div>
+    <div class="save-menu__panel" role="dialog" aria-modal="true" aria-labelledby="save-menu-title">
+      <header class="save-menu__header">
+        <h2 id="save-menu-title">Save &amp; Load</h2>
+        <p>Store snapshots of your hospital, including staff, research, finances, and room designs.</p>
+      </header>
+      <div class="save-menu__body">
+        <p id="save-menu-message" class="save-menu__message" hidden></p>
+        <ul id="save-slot-list" class="save-slot-list" role="list"></ul>
+      </div>
+      <footer class="save-menu__footer">
+        <button type="button" class="save-menu__close" data-close-save id="save-menu-close">Close</button>
+      </footer>
+    </div>
+  </div>
 </body>
 </html>

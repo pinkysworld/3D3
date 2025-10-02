@@ -9,12 +9,16 @@ Pulse Point Hospital is a browser-based management simulation inspired by classi
 - **Freeform campus parcels** – Start with the Founders Atrium build zone and purchase adjacent lots to expand construction in any direction, unlocking fresh real estate for specialised wings.
 - **Hand-painted 2D floorplan** – A WebCanvas renderer paints every room with bespoke furnishings and animates the patient queue for an at-a-glance view of the hospital flow.
 - **Luminous blueprint overview** – The overview canvas now layers glowing blueprint gridlines, soft depth shading, and accent-lit room labels so the hospital feels vibrant while remaining readable.
+- **Hospital showcase view** – Flip to a Two Point Hospital-inspired 2.5D presentation that renders glowing walls, windows, signage, and entryways the moment a room is built.
 - **Radiant treatment wings** – Each build pulses with theme-coloured floor sheen, aura glows, and ambience capsules so you can read environment, welfare, and reputation boosts directly from the canvas.
 - **Room designer** – Tailor each build with adjustable layouts, themed interiors, specialist machine load-outs, décor boosts, and new amenity add-ons such as snack machines, hydration stations, hanging gardens, and ATM kiosks before you drop it onto the blueprint.
+- **Save slots & timeline** – Open the Save & Load menu (or press Ctrl+S) to capture, rename, reload, or delete up to four hospital snapshots without leaving the action.
 - **Staff management** – Hire doctors, surgeons, nurses, assistants, janitors, facility managers, marketers, technicians, researchers, accountants, midwives, therapists, entertainers, dentists, chefs, and security to keep every wing humming.
 - **Facility & grounds care** – Facility managers water plants, clear snack litter, and boost grounds scores while janitors polish interiors so your environment and welfare meters stay high.
 - **Morale & fun** – Theme Hospital-inspired clown care, holotheatre cabaret, zen gardens, gourmet kitchens, and gift shops lift patience, morale, and reputation without leaning into *Biing!*’s risqué side.
 - **Dynamic patient simulation** – Patients arrive with insurance, credit, cash, and installment profiles, emergency escalations, and treatment needs that map to your available rooms, plus individual patience that ebbs and flows with facilities and policies.
+- **Living hospital floor** – Patients queue, walk to treatment, and exit with visible mood glows while staff make intelligent rounds, assist emergencies, and patrol their assigned wings in both blueprint and showcase views.
+- **Streamlined build browser** – Flip between room blueprints, interior themes, and amenity chips in a dedicated build menu so you can queue up designs as quickly as you can dream them.
 - **Treatment pricing** – Every diagnosis carries its own treatment charge that shifts with equipment upgrades and ambience bonuses so you can preview revenue, deposits, and deferred balances before patients enter the ward.
 - **Equipment progression** – Invest in advanced machines to raise room severity capacity and unlock lucrative treatments as your finances grow.
 - **Billing & finance** – Track invoices in a rolling ledger, monitor real-time revenue/expense summaries, take bank loans with scheduled repayments, and follow up on patients who defer balances through installment plans.
