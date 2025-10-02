@@ -3,6 +3,16 @@ import { withAlpha, shiftColor } from "../utils/helpers.js";
 
 const previewCache = new Map();
 
+const asArray = (value) => {
+  if (!value) return [];
+  return Array.isArray(value) ? value : [value];
+};
+
+const pseudoRandom = (seed) => {
+  const x = Math.sin(seed * 12.9898) * 43758.5453;
+  return x - Math.floor(x);
+};
+
 const resolveColor = (palette, token) => {
   if (!token) return "#38bdf8";
   if (typeof token === "string" && token.startsWith("#")) return token;
@@ -113,6 +123,194 @@ const drawSparkleLayer = (ctx, bounds, palette, layer) => {
   ctx.restore();
 };
 
+const drawShardLayer = (ctx, bounds, palette, layer) => {
+  const color = resolveColor(palette, layer.color);
+  const opacity = layer.opacity ?? 0.22;
+  const count = layer.count ?? 4;
+  const tilt = ((layer.tilt ?? 18) * Math.PI) / 180;
+  ctx.save();
+  ctx.translate(bounds.centerX, bounds.centerY);
+  for (let i = 0; i < count; i += 1) {
+    const radius = Math.max(bounds.width, bounds.height) * (0.35 + i * 0.05);
+    ctx.save();
+    ctx.rotate(tilt * (i - count / 2));
+    const gradient = ctx.createLinearGradient(-radius, 0, radius, 0);
+    gradient.addColorStop(0, withAlpha(shiftColor(color, 0.1), opacity * 0.4));
+    gradient.addColorStop(0.5, withAlpha(color, opacity));
+    gradient.addColorStop(1, withAlpha(shiftColor(color, -0.2), opacity * 0.4));
+    ctx.fillStyle = gradient;
+    ctx.beginPath();
+    ctx.moveTo(-radius, -radius * 0.12);
+    ctx.lineTo(radius, 0);
+    ctx.lineTo(-radius, radius * 0.12);
+    ctx.closePath();
+    ctx.fill();
+    ctx.restore();
+  }
+  ctx.restore();
+};
+
+const drawGlowOrbLayer = (ctx, bounds, palette, layer) => {
+  const color = resolveColor(palette, layer.color);
+  const opacity = layer.opacity ?? 0.28;
+  const radius = layer.radius ?? 2.4;
+  const spacingX = layer.spacingX ?? 24;
+  const spacingY = layer.spacingY ?? 22;
+  ctx.save();
+  for (let y = bounds.minY - spacingY; y <= bounds.maxY + spacingY; y += spacingY) {
+    for (let x = bounds.minX - spacingX; x <= bounds.maxX + spacingX; x += spacingX) {
+      const gradient = ctx.createRadialGradient(x, y, radius * 0.3, x, y, radius);
+      gradient.addColorStop(0, withAlpha(color, opacity));
+      gradient.addColorStop(1, withAlpha(color, 0));
+      ctx.fillStyle = gradient;
+      ctx.beginPath();
+      ctx.arc(x, y, radius, 0, Math.PI * 2);
+      ctx.fill();
+    }
+  }
+  ctx.restore();
+};
+
+const drawTileLayer = (ctx, bounds, palette, layer) => {
+  const grout = resolveColor(palette, layer.grout ?? layer.color);
+  const groutOpacity = layer.groutOpacity ?? 0.32;
+  const tileWidth = layer.tileWidth ?? 36;
+  const tileHeight = layer.tileHeight ?? 36;
+  const angle = ((layer.angle ?? 0) * Math.PI) / 180;
+  const lineWidth = layer.lineWidth ?? 1.1;
+  const bevel = layer.bevel ?? 1.2;
+  const highlightOpacity = layer.highlightOpacity ?? groutOpacity * 0.6;
+  const shadowOpacity = layer.shadowOpacity ?? groutOpacity * 0.8;
+  const highlightColor = withAlpha(shiftColor(grout, 0.35), highlightOpacity);
+  const shadowColor = withAlpha(shiftColor(grout, -0.45), shadowOpacity);
+  const groutColor = withAlpha(grout, groutOpacity);
+
+  const drawGrid = (strokeStyle, offsetX = 0, offsetY = 0) => {
+    ctx.save();
+    ctx.translate(bounds.centerX, bounds.centerY);
+    ctx.rotate(angle);
+    ctx.translate(-bounds.centerX + offsetX, -bounds.centerY + offsetY);
+    ctx.strokeStyle = strokeStyle;
+    ctx.lineWidth = lineWidth;
+    for (let x = bounds.minX - tileWidth; x <= bounds.maxX + tileWidth; x += tileWidth) {
+      ctx.beginPath();
+      ctx.moveTo(x, bounds.minY - tileHeight * 2);
+      ctx.lineTo(x, bounds.maxY + tileHeight * 2);
+      ctx.stroke();
+    }
+    for (let y = bounds.minY - tileHeight; y <= bounds.maxY + tileHeight; y += tileHeight) {
+      ctx.beginPath();
+      ctx.moveTo(bounds.minX - tileWidth * 2, y);
+      ctx.lineTo(bounds.maxX + tileWidth * 2, y);
+      ctx.stroke();
+    }
+    ctx.restore();
+  };
+
+  drawGrid(groutColor);
+  if (highlightOpacity > 0) {
+    drawGrid(highlightColor, -bevel * Math.cos(angle), -bevel * Math.sin(angle));
+  }
+  if (shadowOpacity > 0) {
+    drawGrid(shadowColor, bevel * Math.cos(angle + Math.PI / 2), bevel * Math.sin(angle + Math.PI / 2));
+  }
+};
+
+const drawPlankLayer = (ctx, bounds, palette, layer) => {
+  const plankColor = resolveColor(palette, layer.color);
+  const seamColor = resolveColor(palette, layer.seamColor ?? palette.mid ?? plankColor);
+  const grainColor = resolveColor(palette, layer.grainColor ?? palette.accent ?? plankColor);
+  const plankWidth = layer.width ?? 28;
+  const gap = layer.gap ?? 2.4;
+  const angle = ((layer.angle ?? 0) * Math.PI) / 180;
+  const fillOpacity = layer.fillOpacity ?? 0.12;
+  const seamOpacity = layer.seamOpacity ?? 0.32;
+  const grainOpacity = layer.grainOpacity ?? 0.16;
+  const grainCount = layer.grainCount ?? 2;
+  const grainAmplitude = layer.grainAmplitude ?? 3.2;
+  const grainFrequency = layer.grainFrequency ?? 0.08;
+
+  ctx.save();
+  ctx.translate(bounds.centerX, bounds.centerY);
+  ctx.rotate(angle);
+  ctx.translate(-bounds.centerX, -bounds.centerY);
+
+  for (let x = bounds.minX - plankWidth; x <= bounds.maxX + plankWidth; x += plankWidth) {
+    const plankInnerWidth = plankWidth - gap;
+    const shade = Math.sin((x + bounds.centerX) * 0.04) * 0.08;
+    ctx.fillStyle = withAlpha(shiftColor(plankColor, shade), fillOpacity);
+    ctx.fillRect(x, bounds.minY - 20, plankInnerWidth, bounds.height + 40);
+
+    ctx.strokeStyle = withAlpha(shiftColor(seamColor, -0.18), seamOpacity);
+    ctx.lineWidth = 1.2;
+    ctx.beginPath();
+    ctx.moveTo(x, bounds.minY - 24);
+    ctx.lineTo(x, bounds.maxY + 24);
+    ctx.stroke();
+    ctx.beginPath();
+    ctx.moveTo(x + plankInnerWidth, bounds.minY - 24);
+    ctx.lineTo(x + plankInnerWidth, bounds.maxY + 24);
+    ctx.stroke();
+
+    ctx.strokeStyle = withAlpha(shiftColor(grainColor, 0.2), grainOpacity);
+    ctx.lineWidth = 1;
+    for (let g = 0; g < grainCount; g += 1) {
+      const offsetSeed = x * 0.5 + g * 32;
+      ctx.beginPath();
+      let first = true;
+      for (let y = bounds.minY - 20; y <= bounds.maxY + 20; y += 6) {
+        const wiggle = Math.sin((y + offsetSeed) * grainFrequency) * grainAmplitude;
+        const px = x + plankInnerWidth * 0.5 + wiggle * (g % 2 === 0 ? 1 : -1);
+        const py = y + Math.sin((y + offsetSeed) * 0.03) * 0.6;
+        if (first) {
+          ctx.moveTo(px, py);
+          first = false;
+        } else {
+          ctx.lineTo(px, py);
+        }
+      }
+      ctx.stroke();
+    }
+  }
+
+  ctx.restore();
+};
+
+const drawSpeckleLayer = (ctx, bounds, palette, layer) => {
+  const color = resolveColor(palette, layer.color);
+  const opacity = layer.opacity ?? 0.22;
+  const size = layer.size ?? 1.4;
+  const density = layer.density ?? 0.6;
+  const softness = layer.softness ?? 0.5;
+  const count = Math.max(
+    12,
+    Math.round((bounds.width * bounds.height * density) / 420)
+  );
+  ctx.save();
+  for (let index = 0; index < count; index += 1) {
+    const rx = pseudoRandom(index * 3.37 + bounds.minX);
+    const ry = pseudoRandom(index * 5.91 + bounds.minY);
+    const cx = bounds.minX + rx * bounds.width;
+    const cy = bounds.minY + ry * bounds.height;
+    const radius = size * (0.6 + pseudoRandom(index * 7.73) * 0.8);
+    if (softness > 0) {
+      const gradient = ctx.createRadialGradient(cx, cy, radius * 0.2, cx, cy, radius);
+      gradient.addColorStop(0, withAlpha(color, opacity));
+      gradient.addColorStop(1, withAlpha(color, opacity * (1 - softness)));
+      ctx.fillStyle = gradient;
+      ctx.beginPath();
+      ctx.arc(cx, cy, radius, 0, Math.PI * 2);
+      ctx.fill();
+    } else {
+      ctx.fillStyle = withAlpha(color, opacity);
+      ctx.beginPath();
+      ctx.arc(cx, cy, radius, 0, Math.PI * 2);
+      ctx.fill();
+    }
+  }
+  ctx.restore();
+};
+
 const drawHighlight = (ctx, bounds, palette, highlight) => {
   if (!highlight) return;
   const color = resolveColor(palette, highlight.color);
@@ -203,11 +401,16 @@ const drawWaves = (ctx, bounds, palette, waves) => {
 
 const renderTextureLayers = (ctx, bounds, palette, texture) => {
   fillBaseGradient(ctx, bounds, palette, texture);
+  asArray(texture.tiles).forEach((layer) => drawTileLayer(ctx, bounds, palette, layer));
+  asArray(texture.planks).forEach((layer) => drawPlankLayer(ctx, bounds, palette, layer));
   texture.stripes?.forEach((layer) => drawStripeLayer(ctx, bounds, palette, layer));
   if (texture.veins) drawVeins(ctx, bounds, palette, texture.veins);
   if (texture.waves) drawWaves(ctx, bounds, palette, texture.waves);
+  if (texture.shards) drawShardLayer(ctx, bounds, palette, texture.shards);
   if (texture.dots) drawDotLayer(ctx, bounds, palette, texture.dots);
   if (texture.sparkles) drawSparkleLayer(ctx, bounds, palette, texture.sparkles);
+  if (texture.glowOrbs) drawGlowOrbLayer(ctx, bounds, palette, texture.glowOrbs);
+  if (texture.speckles) drawSpeckleLayer(ctx, bounds, palette, texture.speckles);
   drawHighlight(ctx, bounds, palette, texture.highlight);
   drawSheen(ctx, bounds, palette, texture.sheen);
 };
