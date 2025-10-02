@@ -25,8 +25,7 @@
         <div class="menu-block">
           <h2 class="menu-heading">Functions</h2>
           <nav class="tabs" role="tablist">
-            <button class="tab-button active" data-tab="overview" role="tab">Overview</button>
-            <button class="tab-button" data-tab="build" role="tab">Build</button>
+            <button class="tab-button active" data-tab="overview" role="tab">Mainland</button>
             <button class="tab-button" data-tab="staff" role="tab">Staff</button>
             <button class="tab-button" data-tab="research" role="tab">Research</button>
             <button class="tab-button" data-tab="marketing" role="tab">Marketing</button>
@@ -109,6 +108,15 @@
             </button>
           </div>
         </div>
+        <div class="menu-block construction-entry">
+          <h2 class="menu-heading">Construction</h2>
+          <button class="menu-option" id="construction-menu-toggle" type="button">
+            Enter Construction Mode
+          </button>
+          <p class="menu-hint">
+            Enter Construction mode, then open the Construction Tools dropdown in the playfield to build rooms and manage parcels.
+          </p>
+        </div>
       </aside>
 
       <section class="sidebar tab-content" aria-label="Game controls">
@@ -163,47 +171,6 @@
           </section>
         </section>
 
-        <section id="tab-build" class="tab-panel" role="tabpanel">
-          <h2>Build Rooms</h2>
-          <p>Select a room type and tailor its layout, interior, and equipment before placing it on the grid.</p>
-          <section id="panel-grounds" class="property-panel" aria-label="Hospital grounds">
-            <h3>Hospital Grounds</h3>
-            <p class="property-intro">
-              Purchase additional lots to expand the buildable blueprint. Owned parcels are listed below.
-            </p>
-            <ul id="property-owned" class="property-owned"></ul>
-            <div id="property-market" class="property-market"></div>
-          </section>
-          <div class="build-options" id="build-options"></div>
-          <section id="panel-designer" class="designer-panel" aria-label="Room designer">
-            <h3>Room Designer</h3>
-            <div class="designer-row">
-              <label for="designer-size">Layout Size</label>
-              <select id="designer-size"></select>
-            </div>
-            <div class="designer-row">
-              <label for="designer-theme">Interior Theme</label>
-              <select id="designer-theme"></select>
-            </div>
-            <div class="designer-row">
-              <h4>Equipment</h4>
-              <div id="designer-machines" class="designer-options" role="group" aria-label="Equipment options"></div>
-            </div>
-            <div class="designer-row">
-              <h4>Decorations</h4>
-              <div id="designer-decor" class="designer-options" role="group" aria-label="Decoration options"></div>
-            </div>
-            <div id="designer-summary" class="designer-summary"></div>
-            <button id="designer-apply" type="button" disabled>Apply design to selected room</button>
-          </section>
-          <section id="panel-room-management" class="built-rooms-panel" aria-label="Built rooms">
-            <h3>Room Management</h3>
-            <p class="built-rooms-intro">Select an existing room to resize it, swap interiors, or add new equipment and decor.</p>
-            <ul id="built-rooms" class="built-room-list"></ul>
-          </section>
-          <div class="build-hint" id="build-hint">Click on the hospital grid to place a room.</div>
-        </section>
-
         <section id="tab-staff" class="tab-panel" role="tabpanel">
           <h2>Manage Staff</h2>
           <div id="panel-staff-hire" class="staff-hire">
@@ -230,38 +197,140 @@
       </section>
 
       <section class="playfield" aria-label="Hospital layout">
-        <div class="blueprint-wrapper" aria-label="Construction blueprint">
-          <header class="blueprint-header">
-            <h2>Hospital Blueprint</h2>
-            <p>
-              Select a room from the Build tab, then click an empty tile on the grid to construct it.
-              Coordinates help you map out the hospital wings just like a real blueprint.
-            </p>
-            <div class="blueprint-legend" aria-hidden="true">
-              <span><span class="legend-swatch empty"></span> Empty plot</span>
-              <span><span class="legend-swatch buildable"></span> Build target</span>
-              <span><span class="legend-swatch occupied"></span> Built room</span>
-              <span><span class="legend-swatch locked"></span> Locked parcel</span>
-            </div>
-          </header>
-          <div class="blueprint-gridwrap">
-            <div id="axis-x" class="axis axis-x" aria-hidden="true"></div>
-            <div id="axis-y" class="axis axis-y" aria-hidden="true"></div>
-            <div class="grid-stage">
-              <div class="grid-backdrop" aria-hidden="true"></div>
-              <div id="grid" class="grid" role="grid" aria-label="Hospital floor plan"></div>
-            </div>
+        <div class="playfield-toolbar">
+          <div class="playfield-mode" role="tablist" aria-label="Playfield view modes">
+            <button class="playfield-mode-button active" type="button" data-mode="mainland" role="tab">
+              Mainland View
+            </button>
+            <button class="playfield-mode-button" type="button" data-mode="construction" role="tab">
+              Construction Blueprint
+            </button>
           </div>
-          <div id="blueprint-footnote" class="blueprint-footnote">
-            Pick a room on the Build tab to start construction. Expand the campus by purchasing parcels in Hospital Grounds.
+          <button
+            id="build-dropdown-toggle"
+            class="build-dropdown-toggle"
+            type="button"
+            aria-haspopup="true"
+            aria-expanded="false"
+            aria-controls="build-dropdown"
+          >
+            Construction Tools
+            <span class="chevron" aria-hidden="true"></span>
+          </button>
+        </div>
+        <div
+          id="build-dropdown"
+          class="build-dropdown"
+          role="region"
+          aria-labelledby="build-dropdown-title"
+          aria-hidden="true"
+          hidden
+          tabindex="-1"
+        >
+          <div class="build-dropdown-inner">
+            <header class="build-dropdown-header">
+              <div>
+                <h2 id="build-dropdown-title">Construction Tools</h2>
+                <p class="build-dropdown-copy">
+                  Switch into Construction mode to lay out new facilities, rework rooms, and purchase additional parcels.
+                </p>
+              </div>
+              <button id="build-dropdown-close" class="build-dropdown-close" type="button" aria-label="Close construction tools">
+                <span aria-hidden="true">&times;</span>
+              </button>
+            </header>
+            <section id="tab-build" class="build-panel">
+              <h2>Build Rooms</h2>
+              <p class="build-intro">Select a blueprint, then click the grid to place or edit hospital spaces.</p>
+              <section id="panel-grounds" class="property-panel" aria-label="Hospital grounds">
+                <h3>Hospital Grounds</h3>
+                <p class="property-intro">
+                  Purchase additional lots to expand the buildable blueprint. Owned parcels are listed below.
+                </p>
+                <ul id="property-owned" class="property-owned"></ul>
+                <div id="property-market" class="property-market"></div>
+              </section>
+              <div class="build-options" id="build-options"></div>
+              <section id="panel-designer" class="designer-panel" aria-label="Room designer">
+                <h3>Room Designer</h3>
+                <div class="designer-row">
+                  <label for="designer-size">Layout Size</label>
+                  <select id="designer-size"></select>
+                </div>
+                <div class="designer-row">
+                  <label for="designer-theme">Interior Theme</label>
+                  <select id="designer-theme"></select>
+                </div>
+                <div class="designer-row">
+                  <h4>Equipment</h4>
+                  <div id="designer-machines" class="designer-options" role="group" aria-label="Equipment options"></div>
+                </div>
+                <div class="designer-row">
+                  <h4>Decorations</h4>
+                  <div id="designer-decor" class="designer-options" role="group" aria-label="Decoration options"></div>
+                </div>
+                <div id="designer-summary" class="designer-summary"></div>
+                <button id="designer-apply" type="button" disabled>Apply design to selected room</button>
+              </section>
+              <section id="panel-room-management" class="built-rooms-panel" aria-label="Built rooms">
+                <h3>Room Management</h3>
+                <p class="built-rooms-intro">
+                  Select an existing room to resize it, swap interiors, or add new equipment and decor.
+                </p>
+                <ul id="built-rooms" class="built-room-list"></ul>
+              </section>
+              <div class="build-hint" id="build-hint">Click on the hospital grid to place a room.</div>
+            </section>
           </div>
         </div>
-        <canvas
-          id="hospital-canvas"
-          width="672"
-          height="448"
-          aria-label="Hospital rendered floorplan"
-        ></canvas>
+        <div class="playfield-panels">
+          <div class="playfield-panel active" data-mode="mainland" role="tabpanel" aria-label="Mainland hospital view">
+            <header class="mainland-header">
+              <h2>Hospital In Action</h2>
+              <p class="mainland-summary">
+                Monitor patient arrivals, room status overlays, and treatment flow just like a classic Theme Hospital scene.
+                Staff assignments and queues update live while you manage policies and staffing from the side panels.
+              </p>
+            </header>
+            <canvas
+              id="hospital-canvas"
+              width="672"
+              height="448"
+              aria-label="Hospital rendered floorplan"
+            ></canvas>
+            <p class="mainland-hint">
+              Patients file into reception from the mainland entrance, queue up for treatment, and occupy the rooms you have built.
+            </p>
+          </div>
+          <div class="playfield-panel" data-mode="construction" role="tabpanel" aria-label="Construction blueprint">
+            <div class="blueprint-wrapper">
+              <header class="blueprint-header">
+                <h2>Hospital Blueprint</h2>
+                <p>
+                  Select a room from the Build tools, then click an empty tile on the grid to construct it.
+                  Coordinates help you map out the hospital wings just like a real blueprint.
+                </p>
+                <div class="blueprint-legend" aria-hidden="true">
+                  <span><span class="legend-swatch empty"></span> Empty plot</span>
+                  <span><span class="legend-swatch buildable"></span> Build target</span>
+                  <span><span class="legend-swatch occupied"></span> Built room</span>
+                  <span><span class="legend-swatch locked"></span> Locked parcel</span>
+                </div>
+              </header>
+              <div class="blueprint-gridwrap">
+                <div id="axis-x" class="axis axis-x" aria-hidden="true"></div>
+                <div id="axis-y" class="axis axis-y" aria-hidden="true"></div>
+                <div class="grid-stage">
+                  <div class="grid-backdrop" aria-hidden="true"></div>
+                  <div id="grid" class="grid" role="grid" aria-label="Hospital floor plan"></div>
+                </div>
+              </div>
+              <div id="blueprint-footnote" class="blueprint-footnote">
+                Open the Construction Tools dropdown to choose a room blueprint. Expand the campus by purchasing parcels in Hospital Grounds.
+              </div>
+            </div>
+          </div>
+        </div>
       </section>
 
       <aside class="sidebar secondary" aria-label="Operations">
