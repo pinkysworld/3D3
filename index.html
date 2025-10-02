@@ -1,0 +1,322 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Pulse Point Hospital</title>
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <div id="app">
+    <header>
+      <h1>Pulse Point Hospital</h1>
+      <div class="stats">
+        <div>Day <span id="stat-day">1</span></div>
+        <div>Cash ¤<span id="stat-cash">150,000</span></div>
+        <div>Reputation <span id="stat-reputation">50</span></div>
+        <div>Patients Treated <span id="stat-treated">0</span></div>
+        <div>Environment <span id="stat-environment">55</span></div>
+        <div>Patient Welfare <span id="stat-welfare">55</span></div>
+      </div>
+    </header>
+
+    <main>
+      <aside class="menu-rail" aria-label="Primary navigation">
+        <div class="menu-block">
+          <h2 class="menu-heading">Functions</h2>
+          <nav class="tabs" role="tablist">
+            <button class="tab-button active" data-tab="overview" role="tab">Overview</button>
+            <button class="tab-button" data-tab="build" role="tab">Build</button>
+            <button class="tab-button" data-tab="staff" role="tab">Staff</button>
+            <button class="tab-button" data-tab="research" role="tab">Research</button>
+            <button class="tab-button" data-tab="marketing" role="tab">Marketing</button>
+          </nav>
+        </div>
+        <div class="menu-block">
+          <h2 class="menu-heading">Options</h2>
+          <div class="menu-options" role="list">
+            <button
+              class="menu-option"
+              role="listitem"
+              data-tab-target="overview"
+              data-panel="#panel-policies"
+            >
+              Hospital Policies
+            </button>
+            <button
+              class="menu-option"
+              role="listitem"
+              data-tab-target="overview"
+              data-panel="#panel-finance"
+            >
+              Finance &amp; Loans
+            </button>
+            <button
+              class="menu-option"
+              role="listitem"
+              data-tab-target="build"
+              data-panel="#panel-grounds"
+            >
+              Ground Expansion
+            </button>
+            <button
+              class="menu-option"
+              role="listitem"
+              data-tab-target="build"
+              data-panel="#panel-designer"
+            >
+              Room Designer
+            </button>
+            <button
+              class="menu-option"
+              role="listitem"
+              data-tab-target="build"
+              data-panel="#panel-room-management"
+            >
+              Room Management
+            </button>
+            <button
+              class="menu-option"
+              role="listitem"
+              data-tab-target="staff"
+              data-panel="#panel-staff-hire"
+            >
+              Staff Hiring
+            </button>
+            <button
+              class="menu-option"
+              role="listitem"
+              data-tab-target="staff"
+              data-panel="#panel-staff-roster"
+            >
+              Staff Roster
+            </button>
+            <button
+              class="menu-option"
+              role="listitem"
+              data-tab-target="research"
+              data-panel="#tab-research"
+            >
+              Research Projects
+            </button>
+            <button
+              class="menu-option"
+              role="listitem"
+              data-tab-target="marketing"
+              data-panel="#tab-marketing"
+            >
+              Marketing Campaigns
+            </button>
+          </div>
+        </div>
+      </aside>
+
+      <section class="sidebar tab-content" aria-label="Game controls">
+        <section id="tab-overview" class="tab-panel active" role="tabpanel">
+          <h2>Hospital Overview</h2>
+          <p>Balance your hospital's prestige, finance, and patient care. Keep staff happy and the wards running smoothly.</p>
+          <div class="meter">
+            <label for="meter-cleanliness">Cleanliness</label>
+            <progress id="meter-cleanliness" value="80" max="100"></progress>
+          </div>
+          <div class="meter">
+            <label for="meter-efficiency">Efficiency</label>
+            <progress id="meter-efficiency" value="65" max="100"></progress>
+          </div>
+          <div class="meter">
+            <label for="meter-morale">Staff Morale</label>
+            <progress id="meter-morale" value="70" max="100"></progress>
+          </div>
+          <div class="meter">
+            <label for="meter-grounds">Grounds Care</label>
+            <progress id="meter-grounds" value="72" max="100"></progress>
+          </div>
+          <div class="meter">
+            <label for="meter-plants">Plant Health</label>
+            <progress id="meter-plants" value="78" max="100"></progress>
+          </div>
+          <div class="policies" id="panel-policies">
+            <h3>Hospital Policies</h3>
+            <label>
+              <input type="checkbox" id="policy-fast-track" />
+              Fast-track emergency patients (higher cost, reputation boost)
+            </label>
+            <label>
+              <input type="checkbox" id="policy-overtime" />
+              Offer overtime pay (reduces morale loss, adds wage cost)
+            </label>
+          </div>
+          <section id="panel-finance" class="finance-panel" aria-label="Hospital finance options">
+            <h3>Finance &amp; Billing</h3>
+            <p>Secure loans for expansion and monitor how patients settle their care costs.</p>
+            <div class="loan-offers" id="loan-offers"></div>
+            <div class="finance-status">
+              <div>
+                <h4>Active Loans</h4>
+                <ul id="active-loans" class="loan-list"></ul>
+              </div>
+              <div>
+                <h4>Patient Receivables</h4>
+                <div id="receivables-summary" class="receivables-summary"></div>
+              </div>
+            </div>
+          </section>
+        </section>
+
+        <section id="tab-build" class="tab-panel" role="tabpanel">
+          <h2>Build Rooms</h2>
+          <p>Select a room type and tailor its layout, interior, and equipment before placing it on the grid.</p>
+          <section id="panel-grounds" class="property-panel" aria-label="Hospital grounds">
+            <h3>Hospital Grounds</h3>
+            <p class="property-intro">
+              Purchase additional lots to expand the buildable blueprint. Owned parcels are listed below.
+            </p>
+            <ul id="property-owned" class="property-owned"></ul>
+            <div id="property-market" class="property-market"></div>
+          </section>
+          <div class="build-options" id="build-options"></div>
+          <section id="panel-designer" class="designer-panel" aria-label="Room designer">
+            <h3>Room Designer</h3>
+            <div class="designer-row">
+              <label for="designer-size">Layout Size</label>
+              <select id="designer-size"></select>
+            </div>
+            <div class="designer-row">
+              <label for="designer-theme">Interior Theme</label>
+              <select id="designer-theme"></select>
+            </div>
+            <div class="designer-row">
+              <h4>Equipment</h4>
+              <div id="designer-machines" class="designer-options" role="group" aria-label="Equipment options"></div>
+            </div>
+            <div class="designer-row">
+              <h4>Decorations</h4>
+              <div id="designer-decor" class="designer-options" role="group" aria-label="Decoration options"></div>
+            </div>
+            <div id="designer-summary" class="designer-summary"></div>
+            <button id="designer-apply" type="button" disabled>Apply design to selected room</button>
+          </section>
+          <section id="panel-room-management" class="built-rooms-panel" aria-label="Built rooms">
+            <h3>Room Management</h3>
+            <p class="built-rooms-intro">Select an existing room to resize it, swap interiors, or add new equipment and decor.</p>
+            <ul id="built-rooms" class="built-room-list"></ul>
+          </section>
+          <div class="build-hint" id="build-hint">Click on the hospital grid to place a room.</div>
+        </section>
+
+        <section id="tab-staff" class="tab-panel" role="tabpanel">
+          <h2>Manage Staff</h2>
+          <div id="panel-staff-hire" class="staff-hire">
+            <h3>Hire Staff</h3>
+            <div id="staff-candidates" class="card-list"></div>
+          </div>
+          <div id="panel-staff-roster" class="staff-roster">
+            <h3>Roster</h3>
+            <ul id="staff-roster"></ul>
+          </div>
+        </section>
+
+        <section id="tab-research" class="tab-panel" role="tabpanel">
+          <h2>Research &amp; Development</h2>
+          <p>Invest in new treatments and facility upgrades to stay ahead.</p>
+          <ul id="research-projects" class="card-list"></ul>
+        </section>
+
+        <section id="tab-marketing" class="tab-panel" role="tabpanel">
+          <h2>Public Relations &amp; Marketing</h2>
+          <p>Launch campaigns to attract specific patient groups and investors.</p>
+          <ul id="marketing-campaigns" class="card-list"></ul>
+        </section>
+      </section>
+
+      <section class="playfield" aria-label="Hospital layout">
+        <div class="blueprint-wrapper" aria-label="Construction blueprint">
+          <header class="blueprint-header">
+            <h2>Hospital Blueprint</h2>
+            <p>
+              Select a room from the Build tab, then click an empty tile on the grid to construct it.
+              Coordinates help you map out the hospital wings just like a real blueprint.
+            </p>
+            <div class="blueprint-legend" aria-hidden="true">
+              <span><span class="legend-swatch empty"></span> Empty plot</span>
+              <span><span class="legend-swatch buildable"></span> Build target</span>
+              <span><span class="legend-swatch occupied"></span> Built room</span>
+              <span><span class="legend-swatch locked"></span> Locked parcel</span>
+            </div>
+          </header>
+          <div class="blueprint-gridwrap">
+            <div id="axis-x" class="axis axis-x" aria-hidden="true"></div>
+            <div id="axis-y" class="axis axis-y" aria-hidden="true"></div>
+            <div class="grid-stage">
+              <div class="grid-backdrop" aria-hidden="true"></div>
+              <div id="grid" class="grid" role="grid" aria-label="Hospital floor plan"></div>
+            </div>
+          </div>
+          <div id="blueprint-footnote" class="blueprint-footnote">
+            Pick a room on the Build tab to start construction. Expand the campus by purchasing parcels in Hospital Grounds.
+          </div>
+        </div>
+        <canvas
+          id="hospital-canvas"
+          width="672"
+          height="448"
+          aria-label="Hospital rendered floorplan"
+        ></canvas>
+      </section>
+
+      <aside class="sidebar secondary" aria-label="Operations">
+        <section>
+          <h2>Patient Queue</h2>
+          <ul id="patient-queue" class="queue-list"></ul>
+        </section>
+        <section>
+          <h2>Objectives</h2>
+          <ul id="objectives" class="objectives"></ul>
+        </section>
+        <section>
+          <h2>Daily Report</h2>
+          <div id="daily-report"></div>
+        </section>
+        <section>
+          <h2>Billing Ledger</h2>
+          <ul id="billing-ledger" class="ledger-list"></ul>
+        </section>
+        <section>
+          <h2>Event Log</h2>
+          <ul id="event-log" class="event-log"></ul>
+        </section>
+      </aside>
+    </main>
+  </div>
+
+  <template id="candidate-template">
+    <div class="card">
+      <h4 class="name"></h4>
+      <p class="role"></p>
+      <p class="traits"></p>
+      <button class="hire-button">Hire - ¤<span class="cost"></span></button>
+    </div>
+  </template>
+
+  <template id="research-template">
+    <div class="card">
+      <h4 class="name"></h4>
+      <p class="desc"></p>
+      <div class="progress-row">
+        <progress max="100" value="0"></progress>
+        <button class="invest-button">Invest ¤<span class="cost"></span></button>
+      </div>
+    </div>
+  </template>
+
+  <template id="campaign-template">
+    <div class="card">
+      <h4 class="name"></h4>
+      <p class="desc"></p>
+      <button class="launch-button">Launch ¤<span class="cost"></span></button>
+    </div>
+  </template>
+
+  <script src="main.js" type="module"></script>
+</body>
+</html>
