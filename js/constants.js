@@ -1,5 +1,5 @@
-export const GRID_WIDTH = 12;
-export const GRID_HEIGHT = 8;
+export const GRID_WIDTH = 18;
+export const GRID_HEIGHT = 12;
 export const STARTING_CASH = 150000;
 export const DAY_TICKS = 60;
 export const CANVAS_CELL = 56;
