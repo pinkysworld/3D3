@@ -114,6 +114,74 @@ const drawBed = (ctx, { x, y, width, height, blanket, pillow, frame }) => {
   ctx.restore();
 };
 
+const drawPrivacyScreen = (ctx, { x, y, width, height, color, accent }) => {
+  ctx.save();
+  drawRoundedRect(ctx, x, y, width, height, 14);
+  const panelGradient = ctx.createLinearGradient(x, y, x + width, y + height);
+  panelGradient.addColorStop(0, withAlpha(color, 0.85));
+  panelGradient.addColorStop(1, withAlpha(shiftColor(color, -0.12), 0.92));
+  ctx.fillStyle = panelGradient;
+  ctx.fill();
+  ctx.strokeStyle = withAlpha(shiftColor(color, -0.25), 0.6);
+  ctx.lineWidth = 1.6;
+  ctx.stroke();
+
+  ctx.strokeStyle = withAlpha(accent, 0.35);
+  ctx.lineWidth = 1.1;
+  ctx.beginPath();
+  ctx.moveTo(x + 10, y + height * 0.4);
+  ctx.lineTo(x + width - 10, y + height * 0.4);
+  ctx.stroke();
+
+  ctx.beginPath();
+  ctx.moveTo(x + 10, y + height * 0.65);
+  ctx.lineTo(x + width - 10, y + height * 0.65);
+  ctx.stroke();
+
+  ctx.fillStyle = withAlpha(accent, 0.5);
+  ctx.beginPath();
+  ctx.arc(x + width * 0.18, y + height * 0.2, 4, 0, Math.PI * 2);
+  ctx.arc(x + width * 0.82, y + height * 0.2, 4, 0, Math.PI * 2);
+  ctx.fill();
+
+  ctx.fillStyle = withAlpha(shiftColor(color, -0.35), 0.75);
+  ctx.fillRect(x + 8, y + height - 8, width - 16, 4);
+  ctx.restore();
+};
+
+const drawIVStand = (ctx, { x, y, height, pole, bag, accent }) => {
+  ctx.save();
+  ctx.strokeStyle = withAlpha(pole, 0.75);
+  ctx.lineWidth = 2.2;
+  ctx.beginPath();
+  ctx.moveTo(x, y);
+  ctx.lineTo(x, y + height);
+  ctx.stroke();
+
+  ctx.lineWidth = 1.4;
+  ctx.beginPath();
+  ctx.moveTo(x - 14, y + height);
+  ctx.lineTo(x + 14, y + height);
+  ctx.stroke();
+
+  ctx.beginPath();
+  ctx.moveTo(x, y + height * 0.2);
+  ctx.lineTo(x + 18, y + height * 0.2 - 8);
+  ctx.stroke();
+
+  drawRoundedRect(ctx, x + 14, y + height * 0.2 - 20, 20, 26, 6);
+  const bagGradient = ctx.createLinearGradient(x + 14, y + height * 0.2 - 20, x + 34, y + height * 0.2 + 6);
+  bagGradient.addColorStop(0, withAlpha(bag, 0.92));
+  bagGradient.addColorStop(1, withAlpha(shiftColor(bag, -0.18), 0.95));
+  ctx.fillStyle = bagGradient;
+  ctx.fill();
+  ctx.strokeStyle = withAlpha(accent, 0.55);
+  ctx.lineWidth = 1.2;
+  ctx.stroke();
+
+  ctx.restore();
+};
+
 const drawMonitorArm = (ctx, x, y, color) => {
   ctx.save();
   ctx.strokeStyle = withAlpha(color, 0.6);
@@ -206,6 +274,127 @@ const drawSurgeryTable = (ctx, { x, y, width, height, surface, frame, accent }) 
   ctx.lineTo(x + 18, y + height + 20);
   ctx.moveTo(x + width - 18, y + height);
   ctx.lineTo(x + width - 18, y + height + 20);
+  ctx.stroke();
+  ctx.restore();
+};
+
+const drawGantryFrame = (ctx, { x, y, radius, color, accent }) => {
+  ctx.save();
+  ctx.translate(x, y);
+  const gradient = ctx.createLinearGradient(-radius, -radius, radius, radius);
+  gradient.addColorStop(0, withAlpha(shiftColor(color, 0.18), 0.92));
+  gradient.addColorStop(1, withAlpha(shiftColor(color, -0.18), 0.96));
+  ctx.fillStyle = gradient;
+  ctx.beginPath();
+  ctx.arc(0, 0, radius, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.lineWidth = 3;
+  ctx.strokeStyle = withAlpha(accent, 0.5);
+  ctx.stroke();
+
+  ctx.beginPath();
+  ctx.arc(0, 0, radius * 0.55, 0, Math.PI * 2);
+  ctx.lineWidth = 2;
+  ctx.strokeStyle = withAlpha(accent, 0.3);
+  ctx.stroke();
+  ctx.restore();
+};
+
+const drawLabModule = (ctx, { x, y, width, height, surface, accent }) => {
+  ctx.save();
+  drawRoundedRect(ctx, x, y, width, height, 12);
+  const gradient = ctx.createLinearGradient(x, y, x + width, y + height);
+  gradient.addColorStop(0, withAlpha(surface, 0.94));
+  gradient.addColorStop(1, withAlpha(shiftColor(surface, -0.18), 0.96));
+  ctx.fillStyle = gradient;
+  ctx.fill();
+  ctx.strokeStyle = withAlpha(accent, 0.4);
+  ctx.lineWidth = 1.4;
+  ctx.stroke();
+  drawBeaker(ctx, { x: x + 14, y: y - 14, width: 14, height: 22, color: accent, glow: accent });
+  drawScreen(ctx, x + width - 38, y - 12, 32, 18, accent);
+  ctx.restore();
+};
+
+const drawTherapyChair = (ctx, { x, y, width, height, cushion, frame, accent }) => {
+  ctx.save();
+  drawRoundedRect(ctx, x, y, width, height, 16);
+  const gradient = ctx.createLinearGradient(x, y, x + width, y + height);
+  gradient.addColorStop(0, withAlpha(cushion, 0.9));
+  gradient.addColorStop(1, withAlpha(shiftColor(cushion, -0.2), 0.94));
+  ctx.fillStyle = gradient;
+  ctx.fill();
+  ctx.strokeStyle = withAlpha(accent, 0.35);
+  ctx.lineWidth = 1.6;
+  ctx.stroke();
+  ctx.beginPath();
+  ctx.strokeStyle = withAlpha(frame, 0.65);
+  ctx.lineWidth = 4;
+  ctx.moveTo(x + 12, y + height);
+  ctx.lineTo(x + 18, y + height + 18);
+  ctx.moveTo(x + width - 12, y + height);
+  ctx.lineTo(x + width - 18, y + height + 18);
+  ctx.stroke();
+  addOverheadGlow(ctx, x + width / 2, y - 6, width, accent, 0.22);
+  ctx.restore();
+};
+
+const drawHyperbaricPod = (ctx, { x, y, width, height, shell, windowColor, accent }) => {
+  ctx.save();
+  drawRoundedRect(ctx, x, y, width, height, height / 2);
+  const gradient = ctx.createLinearGradient(x, y, x + width, y + height);
+  gradient.addColorStop(0, withAlpha(shell, 0.95));
+  gradient.addColorStop(1, withAlpha(shiftColor(shell, -0.2), 0.9));
+  ctx.fillStyle = gradient;
+  ctx.fill();
+  ctx.strokeStyle = withAlpha(accent, 0.45);
+  ctx.lineWidth = 2;
+  ctx.stroke();
+
+  drawRoundedRect(ctx, x + width * 0.25, y + height * 0.28, width * 0.5, height * 0.36, height * 0.22);
+  const windowGradient = ctx.createLinearGradient(x, y, x + width, y + height);
+  windowGradient.addColorStop(0, withAlpha(windowColor, 0.82));
+  windowGradient.addColorStop(1, withAlpha(shiftColor(windowColor, -0.2), 0.72));
+  ctx.fillStyle = windowGradient;
+  ctx.fill();
+  addOverheadGlow(ctx, x + width / 2, y + height * 0.6, Math.max(width, height) * 0.6, accent, 0.26);
+  ctx.restore();
+};
+
+const drawSleepConsole = (ctx, { x, y, width, height, color, accent }) => {
+  ctx.save();
+  drawRoundedRect(ctx, x, y, width, height, 10);
+  const gradient = ctx.createLinearGradient(x, y, x + width, y + height);
+  gradient.addColorStop(0, withAlpha(color, 0.9));
+  gradient.addColorStop(1, withAlpha(shiftColor(color, -0.2), 0.94));
+  ctx.fillStyle = gradient;
+  ctx.fill();
+  ctx.strokeStyle = withAlpha(accent, 0.4);
+  ctx.lineWidth = 1.2;
+  ctx.stroke();
+  ctx.restore();
+};
+
+const drawWaterBasin = (ctx, { x, y, width, height, water, accent }) => {
+  ctx.save();
+  drawRoundedRect(ctx, x, y, width, height, 28);
+  const gradient = ctx.createLinearGradient(x, y, x, y + height);
+  gradient.addColorStop(0, withAlpha(water, 0.85));
+  gradient.addColorStop(1, withAlpha(shiftColor(water, -0.2), 0.92));
+  ctx.fillStyle = gradient;
+  ctx.fill();
+  ctx.strokeStyle = withAlpha(accent, 0.32);
+  ctx.lineWidth = 2;
+  ctx.stroke();
+  ctx.restore();
+};
+
+const drawRipple = (ctx, { x, y, radius, color, opacity = 0.18 }) => {
+  ctx.save();
+  ctx.strokeStyle = withAlpha(color, opacity);
+  ctx.lineWidth = 2.2;
+  ctx.beginPath();
+  ctx.arc(x, y, radius, 0, Math.PI * 2);
   ctx.stroke();
   ctx.restore();
 };
@@ -371,6 +560,14 @@ const CATEGORY_RENDERERS = {
   ward: (ctx) => {
     drawBackground(ctx, "#10243a", "#0b1828");
     drawFloorPlate(ctx, "#0f2134", "#34d399");
+    drawPrivacyScreen(ctx, {
+      x: 66,
+      y: 32,
+      width: 80,
+      height: 52,
+      color: "#1f2937",
+      accent: "#60a5fa",
+    });
     drawBed(ctx, {
       x: 18,
       y: 46,
@@ -390,6 +587,14 @@ const CATEGORY_RENDERERS = {
       frame: "#1e293b",
     });
     addOverheadGlow(ctx, 60, 34, 40, "#34d399", 0.2);
+    drawIVStand(ctx, {
+      x: 38,
+      y: 28,
+      height: 52,
+      pole: "#94a3b8",
+      bag: "#34d399",
+      accent: "#22d3ee",
+    });
   },
   diagnostics: (ctx) => {
     drawBackground(ctx, "#0b1b36", "#050b18");
@@ -465,6 +670,69 @@ const CATEGORY_RENDERERS = {
     drawClipboard(ctx, { x: 34, y: 44, width: 44, height: 48, color: "#1e293b", accent: "#38bdf8" });
     drawScreen(ctx, 88, 38, 32, 20, "#34d399");
     drawScreen(ctx, 94, 64, 26, 16, "#38bdf8");
+  },
+  imaging: (ctx) => {
+    drawBackground(ctx, "#07162d", "#040914");
+    drawFloorPlate(ctx, "#0f2134", "#38bdf8");
+    drawGantryFrame(ctx, { x: 108, y: 66, radius: 34, color: "#1d4ed8", accent: "#38bdf8" });
+    drawBed(ctx, { x: 22, y: 64, width: 70, height: 36, blanket: "#38bdf8", pillow: "#f8fafc", frame: "#0f172a" });
+    drawScreen(ctx, 36, 32, 32, 18, "#22d3ee");
+  },
+  laboratory: (ctx) => {
+    drawBackground(ctx, "#180b26", "#090413");
+    drawFloorPlate(ctx, "#1b0f2f", "#a855f7");
+    drawLabModule(ctx, {
+      x: 32,
+      y: 54,
+      width: 100,
+      height: 36,
+      surface: "#312e81",
+      accent: "#a855f7",
+    });
+    drawBeaker(ctx, { x: 48, y: 42, width: 16, height: 24, color: "#22d3ee", glow: "#22d3ee" });
+    addOverheadGlow(ctx, 90, 42, 34, "#a855f7", 0.24);
+  },
+  therapy: (ctx) => {
+    drawBackground(ctx, "#2f1322", "#11060d");
+    drawFloorPlate(ctx, "#2c1624", "#f97316");
+    drawTherapyChair(ctx, {
+      x: 46,
+      y: 50,
+      width: 68,
+      height: 42,
+      cushion: "#f97316",
+      frame: "#1f2937",
+      accent: "#fbbf24",
+    });
+    drawSleepConsole(ctx, { x: 24, y: 40, width: 30, height: 18, color: "#a855f7", accent: "#f97316" });
+  },
+  hyperbaric: (ctx) => {
+    drawBackground(ctx, "#061a2a", "#020b14");
+    drawFloorPlate(ctx, "#0a2336", "#22d3ee");
+    drawHyperbaricPod(ctx, {
+      x: 38,
+      y: 52,
+      width: 94,
+      height: 44,
+      shell: "#0ea5e9",
+      windowColor: "#67e8f9",
+      accent: "#22d3ee",
+    });
+  },
+  recovery: (ctx) => {
+    drawBackground(ctx, "#120f29", "#080717");
+    drawFloorPlate(ctx, "#181436", "#60a5fa");
+    drawBed(ctx, { x: 28, y: 52, width: 96, height: 42, blanket: "#60a5fa", pillow: "#f8fafc", frame: "#0f172a" });
+    drawSleepConsole(ctx, { x: 40, y: 36, width: 32, height: 18, color: "#34d399", accent: "#60a5fa" });
+    addOverheadGlow(ctx, 86, 40, 36, "#60a5fa", 0.24);
+  },
+  aquatic: (ctx) => {
+    drawBackground(ctx, "#041720", "#020b12");
+    drawFloorPlate(ctx, "#06202a", "#22d3ee");
+    drawWaterBasin(ctx, { x: 24, y: 50, width: 116, height: 46, water: "#38bdf8", accent: "#0ea5e9" });
+    drawRipple(ctx, { x: 82, y: 72, radius: 24, color: "#bef264", opacity: 0.22 });
+    drawRipple(ctx, { x: 62, y: 68, radius: 16, color: "#22d3ee", opacity: 0.2 });
+    drawRipple(ctx, { x: 104, y: 70, radius: 18, color: "#0ea5e9", opacity: 0.18 });
   },
 };
 

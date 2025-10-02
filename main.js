@@ -1,6 +1,8 @@
 import {
-  GRID_WIDTH,
-  GRID_HEIGHT,
+  MIN_CAMPUS_WIDTH_UNITS,
+  MIN_CAMPUS_HEIGHT_UNITS,
+  CAMPUS_PADDING_UNITS_X,
+  CAMPUS_PADDING_UNITS_Y,
   STARTING_CASH,
   DAY_TICKS,
   CANVAS_CELL,
@@ -19,7 +21,7 @@ import {
   AUDIO_SETTINGS_STORAGE_KEY,
   DEFAULT_AUDIO_SETTINGS,
   BACKGROUND_MUSIC_DURATION,
-  CORRIDOR_Y,
+  CORRIDOR_OFFSET_FROM_BOTTOM,
   ENTRANCE_X,
   AGENT_PATIENT_SPEED,
   AGENT_STAFF_SPEED,
@@ -62,6 +64,20 @@ const showcaseAnimation = {
   pulse: 0,
   wave: 0,
 };
+
+const ISO_BASE_YAW = Math.PI / 4;
+const ISO_CAMERA_PITCH = Math.atan(
+  ((ISO_WALL_HEIGHT * Math.SQRT1_2) / (ISO_TILE_HEIGHT / 2)) || 1
+);
+const ISO_HORIZONTAL_SCALE = ISO_TILE_WIDTH / Math.SQRT2;
+const ISO_VERTICAL_SCALE = ISO_WALL_HEIGHT / Math.sin(ISO_CAMERA_PITCH);
+const LIGHT_AZIMUTH = (-Math.PI * 2) / 3;
+const LIGHT_DIRECTION = {
+  x: Math.cos(LIGHT_AZIMUTH),
+  y: Math.sin(LIGHT_AZIMUTH),
+};
+const ROTATION_SENSITIVITY = 0.0042;
+const ROTATION_KEY_STEP = Math.PI / 18;
 
 const storage = (() => {
   try {
@@ -118,8 +134,57 @@ const isTileUnlocked = (x, y) => {
 const getPropertyById = (id) => state.properties.find((parcel) => parcel.id === id);
 const getOwnedProperties = () => state.properties.filter((parcel) => parcel.owned);
 
+const createShellForParcel = (parcel) => {
+  if (!parcel) return null;
+  const marginX = Math.max(2, Math.round(parcel.width / 10));
+  const marginY = Math.max(2, Math.round(parcel.height / 8));
+  const width = clamp(parcel.width - marginX * 2, 6, Math.max(6, parcel.width - 2));
+  const height = clamp(parcel.height - marginY * 2, 6, Math.max(6, parcel.height - 2));
+  const shellMarginX = Math.max(1, Math.floor((parcel.width - width) / 2));
+  const shellMarginY = Math.max(1, Math.floor((parcel.height - height) / 2));
+  const shellX = parcel.x + shellMarginX;
+  const shellY = parcel.y + shellMarginY;
+  const doorIndex = clamp(Math.round(ENTRANCE_X - shellX - 0.5), 0, width - 1);
+  const windows = [];
+  const addWindows = (wall, span, spacing) => {
+    const safeSpacing = Math.max(2, spacing);
+    for (let index = 1; index < span - 1; index += safeSpacing) {
+      if (wall === "south" && Math.abs(index - doorIndex) <= 1) {
+        continue;
+      }
+      windows.push({ wall, index });
+    }
+  };
+  addWindows("north", width, Math.round(width / 6));
+  addWindows("south", width, Math.round(width / 5));
+  addWindows("east", height, Math.round(height / 4));
+  addWindows("west", height, Math.round(height / 4));
+  return {
+    id: `shell-${parcel.id}`,
+    x: shellX,
+    y: shellY,
+    width,
+    height,
+    doors: [{ wall: "south", index: doorIndex }],
+    windows,
+  };
+};
+
+const deriveCampusShells = () => {
+  const atrium = getPropertyById("atrium");
+  if (atrium?.owned) {
+    const shell = createShellForParcel(atrium);
+    return shell ? [shell] : [];
+  }
+  const fallback = getOwnedProperties()[0];
+  const shell = createShellForParcel(fallback);
+  return shell ? [shell] : [];
+};
+
 const state = {
-  grid: Array.from({ length: GRID_HEIGHT }, () => Array(GRID_WIDTH).fill(null)),
+  grid: [],
+  gridWidth: MIN_CAMPUS_WIDTH_UNITS,
+  gridHeight: MIN_CAMPUS_HEIGHT_UNITS,
   rooms: [],
   staff: [],
   candidates: [],
@@ -134,6 +199,7 @@ const state = {
   loans: [],
   installmentPlans: [],
   properties: createPropertyState(),
+  shells: [],
   litter: 0,
   ambience: { environment: 0, welfare: 0, morale: 0, reputation: 0 },
   staffAgents: [],
@@ -153,6 +219,78 @@ const state = {
     environmentScore: 55,
     welfareScore: 55,
   },
+};
+
+const createEmptyGrid = (width, height) =>
+  Array.from({ length: height }, () => Array(width).fill(null));
+
+const resizeGrid = (width, height) => {
+  const previousWidth = state.gridWidth;
+  const previousHeight = state.gridHeight;
+  if (state.grid.length === 0) {
+    state.grid = createEmptyGrid(width, height);
+  } else {
+    const newGrid = createEmptyGrid(width, height);
+    for (let y = 0; y < Math.min(previousHeight, height); y += 1) {
+      for (let x = 0; x < Math.min(previousWidth, width); x += 1) {
+        newGrid[y][x] = state.grid[y]?.[x] ?? null;
+      }
+    }
+    state.grid = newGrid;
+  }
+  state.gridWidth = width;
+  state.gridHeight = height;
+};
+
+const getGridWidth = () => state.gridWidth;
+const getGridHeight = () => state.gridHeight;
+const getCorridorY = () => getGridHeight() - CORRIDOR_OFFSET_FROM_BOTTOM;
+
+const getOwnedParcelExtents = () => {
+  const owned = getOwnedProperties();
+  if (!owned.length) {
+    return { maxX: 0, maxY: 0 };
+  }
+  let maxX = 0;
+  let maxY = 0;
+  owned.forEach((parcel) => {
+    maxX = Math.max(maxX, parcel.x + parcel.width);
+    maxY = Math.max(maxY, parcel.y + parcel.height);
+  });
+  return { maxX, maxY };
+};
+
+const computeDynamicGridDimensions = () => {
+  const viewportWidth =
+    typeof window !== "undefined" && typeof window.innerWidth === "number"
+      ? window.innerWidth
+      : 1280;
+  const viewportHeight =
+    typeof window !== "undefined" && typeof window.innerHeight === "number"
+      ? window.innerHeight
+      : 720;
+  const viewportWidthUnits = Math.ceil((viewportWidth / CANVAS_CELL) * 1.6);
+  const viewportHeightUnits = Math.ceil((viewportHeight / CANVAS_CELL) * 1.25);
+  const { maxX, maxY } = getOwnedParcelExtents();
+  const campusWidth = Math.ceil(maxX + CAMPUS_PADDING_UNITS_X);
+  const campusHeight = Math.ceil(maxY + CAMPUS_PADDING_UNITS_Y);
+  const width = Math.max(MIN_CAMPUS_WIDTH_UNITS, viewportWidthUnits, campusWidth);
+  const height = Math.max(
+    MIN_CAMPUS_HEIGHT_UNITS,
+    viewportHeightUnits,
+    campusHeight
+  );
+  return { width, height };
+};
+
+const ensureGridCapacity = () => {
+  const { width, height } = computeDynamicGridDimensions();
+  const needsResize =
+    width !== state.gridWidth || height !== state.gridHeight || state.grid.length === 0;
+  if (needsResize) {
+    resizeGrid(width, height);
+  }
+  return needsResize;
 };
 
 const elements = {
@@ -292,9 +430,13 @@ let viewMode = "showcase";
 let showcaseZoom = 1;
 let showcasePanX = 0;
 let showcasePanY = 0;
+let showcaseRotation = 0;
 let isShowcasePanning = false;
 let showcasePanPointerId = null;
 let showcasePanLastPoint = null;
+let isShowcaseRotating = false;
+let showcaseRotatePointerId = null;
+let showcaseRotateLastPoint = null;
 let lastFocusedBeforeSaveMenu = null;
 let lastFocusedBeforeLotOverview = null;
 let lastFocusedBeforeHospitalOverview = null;
@@ -594,14 +736,44 @@ const computeWheelZoomFactor = (deltaY) => {
 };
 
 const constrainShowcasePan = () => {
-  const width = GRID_WIDTH * CANVAS_CELL;
-  const height = GRID_HEIGHT * CANVAS_CELL;
+  const width = getGridWidth() * CANVAS_CELL;
+  const height = getGridHeight() * CANVAS_CELL;
   const horizontalAllowance = Math.max(0, (width - width / showcaseZoom) / 2);
   const verticalAllowance = Math.max(0, (height - height / showcaseZoom) / 2);
   const limitX = horizontalAllowance + width * SHOWCASE_PAN_PADDING;
   const limitY = verticalAllowance + height * SHOWCASE_PAN_PADDING;
   showcasePanX = clamp(showcasePanX, -limitX, limitX);
   showcasePanY = clamp(showcasePanY, -limitY, limitY);
+};
+
+const normalizeRotation = (angle) => {
+  if (!Number.isFinite(angle)) {
+    return 0;
+  }
+  let normalized = angle % (Math.PI * 2);
+  if (normalized > Math.PI) {
+    normalized -= Math.PI * 2;
+  } else if (normalized < -Math.PI) {
+    normalized += Math.PI * 2;
+  }
+  return normalized;
+};
+
+const setShowcaseRotation = (value, { forceRender = false } = {}) => {
+  const normalized = normalizeRotation(value);
+  const changed = Math.abs(normalized - showcaseRotation) > 0.0001;
+  if (!changed && !forceRender) {
+    return;
+  }
+  showcaseRotation = normalized;
+  isoMapperCache = null;
+  constrainShowcasePan();
+  renderHospitalCanvas();
+};
+
+const adjustShowcaseRotation = (delta) => {
+  if (!delta) return;
+  setShowcaseRotation(showcaseRotation + delta);
 };
 
 const updateShowcaseZoomIndicator = () => {
@@ -626,8 +798,8 @@ const setShowcaseZoom = (
   const clamped = clamp(value, MIN_SHOWCASE_ZOOM, MAX_SHOWCASE_ZOOM);
   const changed = Math.abs(clamped - showcaseZoom) > 0.001;
   if (changed && focusX !== null && focusY !== null && !skipPanAdjustment) {
-    const width = GRID_WIDTH * CANVAS_CELL;
-    const height = GRID_HEIGHT * CANVAS_CELL;
+    const width = getGridWidth() * CANVAS_CELL;
+    const height = getGridHeight() * CANVAS_CELL;
     const centerX = width / 2;
     const centerY = height / 2;
     const deltaX = (focusX - centerX) * (1 / clamped - 1 / previous);
@@ -650,8 +822,8 @@ const adjustShowcaseZoom = (factor, options = {}) => {
 const isBuildSelectionActive = () => Boolean(selectedRoom ?? designerState.blueprint);
 
 const getShowcaseWorldPoint = (offsetX, offsetY, rect) => {
-  const width = GRID_WIDTH * CANVAS_CELL;
-  const height = GRID_HEIGHT * CANVAS_CELL;
+  const width = getGridWidth() * CANVAS_CELL;
+  const height = getGridHeight() * CANVAS_CELL;
   const canvasX = rect.width ? (offsetX / rect.width) * width : offsetX;
   const canvasY = rect.height ? (offsetY / rect.height) * height : offsetY;
   const centerX = width / 2;
@@ -672,7 +844,7 @@ const getShowcaseTileFromOffset = (offsetX, offsetY, rect) => {
   const { x, y } = mapper.unproject(world.x, world.y);
   const tileX = Math.floor(x);
   const tileY = Math.floor(y);
-  if (tileX < 0 || tileY < 0 || tileX >= GRID_WIDTH || tileY >= GRID_HEIGHT) {
+  if (tileX < 0 || tileY < 0 || tileX >= getGridWidth() || tileY >= getGridHeight()) {
     return null;
   }
   return { x: tileX, y: tileY };
@@ -844,9 +1016,42 @@ const handleCanvasDoubleClick = (event) => {
 
 const resetShowcaseView = () => {
   endShowcasePan();
+  endShowcaseRotation();
   showcasePanX = 0;
   showcasePanY = 0;
+  setShowcaseRotation(0);
   setShowcaseZoom(1, { skipPanAdjustment: true, forceRender: true });
+};
+
+const beginShowcaseRotation = (pointerId, clientX, clientY, target) => {
+  endShowcasePan();
+  isShowcaseRotating = true;
+  showcaseRotatePointerId = pointerId ?? null;
+  showcaseRotateLastPoint = { x: clientX, y: clientY };
+  target?.setPointerCapture?.(pointerId ?? undefined);
+  elements.hospitalCanvas?.classList.add("is-rotating");
+};
+
+const updateShowcaseRotationFromPointer = (event) => {
+  if (!isShowcaseRotating || event.pointerId !== showcaseRotatePointerId) {
+    return false;
+  }
+  const last = showcaseRotateLastPoint ?? { x: event.clientX, y: event.clientY };
+  const deltaX = event.clientX - last.x;
+  if (Math.abs(deltaX) < 0.01) {
+    return true;
+  }
+  showcaseRotateLastPoint = { x: event.clientX, y: event.clientY };
+  adjustShowcaseRotation(deltaX * ROTATION_SENSITIVITY);
+  return true;
+};
+
+const endShowcaseRotation = () => {
+  if (!isShowcaseRotating) return;
+  isShowcaseRotating = false;
+  showcaseRotatePointerId = null;
+  showcaseRotateLastPoint = null;
+  elements.hospitalCanvas?.classList.remove("is-rotating");
 };
 
 const endShowcasePan = () => {
@@ -858,7 +1063,8 @@ const endShowcasePan = () => {
 
 const handleCanvasPointerDown = (event) => {
   if (viewMode !== "showcase") return;
-  const isPrimaryButton = event.pointerType === "mouse" ? event.button === 0 : true;
+  const isMouse = event.pointerType === "mouse";
+  const isPrimaryButton = isMouse ? event.button === 0 : true;
   if (isPrimaryButton && isStructurePlacementActive()) {
     const tile = getShowcaseTileFromEvent(event);
     if (tile && handleStructurePlacementClick(tile.x, tile.y)) {
@@ -879,8 +1085,18 @@ const handleCanvasPointerDown = (event) => {
   if (event.pointerType === "mouse" && event.button !== 0 && event.button !== 1 && event.button !== 2) {
     return;
   }
-  if (event.pointerType === "mouse" && event.button === 2) {
+  const wantsRotate =
+    (isMouse && (event.button === 2 || (event.button === 0 && event.altKey))) ||
+    (!isMouse && event.altKey);
+  if (wantsRotate) {
     event.preventDefault();
+    beginShowcaseRotation(event.pointerId, event.clientX, event.clientY, event.currentTarget);
+    return;
+  }
+  const wantsPan =
+    (!isMouse || event.button === 0 || event.button === 1) && !event.altKey && !isShowcaseRotating;
+  if (!wantsPan) {
+    return;
   }
   isShowcasePanning = true;
   showcasePanPointerId = event.pointerId;
@@ -905,6 +1121,10 @@ const handleCanvasPointerMove = (event) => {
   if (!buildPreviewState.active && isBuildSelectionActive()) {
     const tile = getShowcaseTileFromEvent(event);
     setBuildHover(tile);
+  }
+  if (updateShowcaseRotationFromPointer(event)) {
+    event.preventDefault();
+    return;
   }
   if (!isShowcasePanning || event.pointerId !== showcasePanPointerId) {
     return;
@@ -940,6 +1160,12 @@ const handleCanvasPointerUp = (event) => {
     event.preventDefault();
     return;
   }
+  if (isShowcaseRotating && event.pointerId === showcaseRotatePointerId) {
+    event.currentTarget.releasePointerCapture?.(event.pointerId);
+    endShowcaseRotation();
+    event.preventDefault();
+    return;
+  }
   if (event.pointerId !== showcasePanPointerId) {
     return;
   }
@@ -956,6 +1182,11 @@ const handleCanvasPointerCancel = (event) => {
   }
   if (!buildPreviewState.active) {
     clearBuildHover();
+  }
+  if (isShowcaseRotating && (!event.pointerId || event.pointerId === showcaseRotatePointerId)) {
+    event.currentTarget?.releasePointerCapture?.(event.pointerId);
+    endShowcaseRotation();
+    return;
   }
   if (event.pointerId && event.pointerId !== showcasePanPointerId) {
     return;
@@ -1012,13 +1243,13 @@ const getBlueprintBuffer = (width, height) => {
     ctx.globalAlpha = 0.35;
     ctx.strokeStyle = "rgba(94, 234, 212, 0.2)";
     ctx.lineWidth = 1;
-    for (let gx = 0; gx <= GRID_WIDTH; gx++) {
+    for (let gx = 0; gx <= getGridWidth(); gx++) {
       ctx.beginPath();
       ctx.moveTo(gx * CANVAS_CELL, 0);
       ctx.lineTo(gx * CANVAS_CELL, height);
       ctx.stroke();
     }
-    for (let gy = 0; gy <= GRID_HEIGHT; gy++) {
+    for (let gy = 0; gy <= getGridHeight(); gy++) {
       ctx.beginPath();
       ctx.moveTo(0, gy * CANVAS_CELL);
       ctx.lineTo(width, gy * CANVAS_CELL);
@@ -1026,8 +1257,8 @@ const getBlueprintBuffer = (width, height) => {
     }
     ctx.globalAlpha = 0.22;
     ctx.fillStyle = "rgba(94, 234, 212, 0.15)";
-    for (let gy = 0; gy < GRID_HEIGHT; gy++) {
-      for (let gx = 0; gx < GRID_WIDTH; gx++) {
+    for (let gy = 0; gy < getGridHeight(); gy++) {
+      for (let gx = 0; gx < getGridWidth(); gx++) {
         ctx.beginPath();
         ctx.arc(gx * CANVAS_CELL, gy * CANVAS_CELL, 1.8, 0, Math.PI * 2);
         ctx.fill();
@@ -1067,7 +1298,7 @@ const getBlueprintBuffer = (width, height) => {
     ctx.textAlign = "right";
     ctx.textBaseline = "bottom";
     ctx.fillStyle = "rgba(148, 197, 255, 0.4)";
-    ctx.fillText(`${GRID_WIDTH}×${GRID_HEIGHT} tiles`, width - 24, height - 24);
+    ctx.fillText(`${getGridWidth()}×${getGridHeight()} units`, width - 24, height - 24);
     ctx.restore();
   }
   return blueprintBuffer;
@@ -1302,8 +1533,8 @@ const setBuildHover = (tile) => {
   const layout = getSizeOption(designerState.sizeId);
   const layoutWidth = layout.width;
   const layoutHeight = layout.height;
-  const maxX = Math.max(0, GRID_WIDTH - layoutWidth);
-  const maxY = Math.max(0, GRID_HEIGHT - layoutHeight);
+  const maxX = Math.max(0, getGridWidth() - layoutWidth);
+  const maxY = Math.max(0, getGridHeight() - layoutHeight);
   const clampedX = clamp(tile.x, 0, maxX);
   const clampedY = clamp(tile.y, 0, maxY);
   const valid = canPlaceFootprint(clampedX, clampedY, layoutWidth, layoutHeight);
@@ -2615,7 +2846,7 @@ const loadRoomIntoDesigner = (room) => {
 };
 
 const canPlaceFootprint = (x, y, width, height, ignoreRoom = null) => {
-  if (x + width > GRID_WIDTH || y + height > GRID_HEIGHT) return false;
+  if (x + width > getGridWidth() || y + height > getGridHeight()) return false;
   for (let dy = 0; dy < height; dy++) {
     for (let dx = 0; dx < width; dx++) {
       if (!isTileUnlocked(x + dx, y + dy)) {
@@ -2651,8 +2882,8 @@ const occupyRoomFootprint = (room) => {
 };
 
 const hasPlacementForSize = (width, height, ignoreRoom = null) => {
-  for (let y = 0; y <= GRID_HEIGHT - height; y++) {
-    for (let x = 0; x <= GRID_WIDTH - width; x++) {
+  for (let y = 0; y <= getGridHeight() - height; y++) {
+    for (let x = 0; x <= getGridWidth() - width; x++) {
       if (canPlaceFootprint(x, y, width, height, ignoreRoom)) {
         return true;
       }
@@ -2982,12 +3213,12 @@ const renderBlueprintAxes = () => {
   if (!elements.axisX || !elements.axisY) return;
   elements.axisX.innerHTML = "";
   elements.axisY.innerHTML = "";
-  for (let x = 0; x < GRID_WIDTH; x++) {
+  for (let x = 0; x < getGridWidth(); x++) {
     const span = document.createElement("span");
     span.textContent = AXIS_LETTERS[x] ?? String(x + 1);
     elements.axisX.appendChild(span);
   }
-  for (let y = 0; y < GRID_HEIGHT; y++) {
+  for (let y = 0; y < getGridHeight(); y++) {
     const span = document.createElement("span");
     span.textContent = String(y + 1);
     elements.axisY.appendChild(span);
@@ -2998,8 +3229,8 @@ const setupGrid = () => {
   if (!elements.grid) return;
   elements.grid.innerHTML = "";
   renderBlueprintAxes();
-  for (let y = 0; y < GRID_HEIGHT; y++) {
-    for (let x = 0; x < GRID_WIDTH; x++) {
+  for (let y = 0; y < getGridHeight(); y++) {
+    for (let x = 0; x < getGridWidth(); x++) {
       const cell = document.createElement("button");
       cell.className = "grid-cell";
       cell.setAttribute("role", "gridcell");
@@ -3178,8 +3409,8 @@ const beginBuildPreview = (pointerId, x, y, target) => {
 
 const updateBuildPreviewBounds = (x, y) => {
   if (!buildPreviewState.active) return;
-  const clampedX = clamp(x, 0, GRID_WIDTH - 1);
-  const clampedY = clamp(y, 0, GRID_HEIGHT - 1);
+  const clampedX = clamp(x, 0, getGridWidth() - 1);
+  const clampedY = clamp(y, 0, getGridHeight() - 1);
   const minX = Math.min(buildPreviewState.startX, clampedX);
   const minY = Math.min(buildPreviewState.startY, clampedY);
   const maxX = Math.max(buildPreviewState.startX, clampedX);
@@ -3267,8 +3498,8 @@ const handleGridPointerMove = (event) => {
   if (relX < 0 || relY < 0 || relX > rect.width || relY > rect.height) {
     return;
   }
-  const gridX = clamp(Math.floor((relX / rect.width) * GRID_WIDTH), 0, GRID_WIDTH - 1);
-  const gridY = clamp(Math.floor((relY / rect.height) * GRID_HEIGHT), 0, GRID_HEIGHT - 1);
+  const gridX = clamp(Math.floor((relX / rect.width) * getGridWidth()), 0, getGridWidth() - 1);
+  const gridY = clamp(Math.floor((relY / rect.height) * getGridHeight()), 0, getGridHeight() - 1);
   updateBuildPreviewBounds(gridX, gridY);
 };
 
@@ -3302,8 +3533,8 @@ const handleGridCellClick = (event, x, y) => {
 const setupCanvas = () => {
   if (!elements.hospitalCanvas) return;
   const canvas = elements.hospitalCanvas;
-  const width = GRID_WIDTH * CANVAS_CELL;
-  const height = GRID_HEIGHT * CANVAS_CELL;
+  const width = getGridWidth() * CANVAS_CELL;
+  const height = getGridHeight() * CANVAS_CELL;
   const scale = window.devicePixelRatio || 1;
   canvas.width = width * scale;
   canvas.height = height * scale;
@@ -3323,6 +3554,9 @@ const setupCanvas = () => {
     canvas.addEventListener("pointercancel", handleCanvasPointerCancel);
     canvas.addEventListener("pointerleave", handleCanvasPointerLeave);
     canvas.addEventListener("click", handleCanvasClick);
+    canvas.addEventListener("contextmenu", (event) => {
+      event.preventDefault();
+    });
     canvas.dataset.zoomBound = "true";
   }
   invalidateCanvasCache();
@@ -3341,41 +3575,445 @@ const deriveAvatarPalette = (seed, baseColor) => {
   const outfit = shiftColor(baseColor, toneShift);
   const shadow = shiftColor(outfit, -0.45);
   const accent = shiftColor(outfit, 0.35);
-  return { skin, hair, outfit, accent, shadow };
+  const highlight = shiftColor(outfit, 0.2);
+  const mid = shiftColor(outfit, -0.12);
+  const trim = shiftColor(baseColor, 0.45);
+  const fabricLight = shiftColor(outfit, 0.32);
+  const fabricDark = shiftColor(outfit, -0.42);
+  const shoe = shiftColor(baseColor, -0.6);
+  const hairShine = shiftColor(hair, 0.22);
+  return {
+    skin,
+    hair,
+    hairShine,
+    outfit,
+    mid,
+    highlight,
+    accent,
+    trim,
+    shadow,
+    fabricLight,
+    fabricDark,
+    shoe,
+  };
 };
 
-const drawHumanFigure = (ctx, palette, { scale = 1 } = {}) => {
+const WALK_CYCLE_DISTANCE = 0.9;
+const WALK_DECAY_RATE = 2.4;
+
+const ensureAgentMotion = (agent) => {
+  if (!agent) return null;
+  if (!agent.motion) {
+    agent.motion = {
+      phase: Math.random() * Math.PI * 2,
+      idlePhase: Math.random() * Math.PI * 2,
+      intensity: 0,
+      bob: 0,
+      heading: 0,
+      speed: 0,
+    };
+  }
+  return agent.motion;
+};
+
+const updateAgentMotion = (agent, movement = 0, deltaSeconds = 1, headingX = 0, headingY = 0) => {
+  const motion = ensureAgentMotion(agent);
+  if (!motion) return null;
+  const delta = Math.max(0.0001, deltaSeconds);
+  const distance = Math.max(0, movement);
+  if (distance > 0) {
+    motion.phase = (motion.phase + (distance / WALK_CYCLE_DISTANCE) * Math.PI * 2) % (Math.PI * 2);
+    motion.intensity = Math.min(1, motion.intensity + distance * 1.6);
+    motion.speed = distance / delta;
+    if (headingX !== 0 || headingY !== 0) {
+      motion.heading = Math.atan2(headingY, headingX);
+    }
+  } else {
+    motion.intensity = Math.max(0, motion.intensity - delta * WALK_DECAY_RATE);
+    motion.speed = 0;
+  }
+  motion.idlePhase = (motion.idlePhase + delta * (0.7 + motion.intensity * 0.8)) % (Math.PI * 2);
+  const walkBob = Math.sin(motion.phase * 2) * 2.6 * motion.intensity;
+  const idleBob = Math.sin(motion.idlePhase) * (1 - motion.intensity) * 1.2;
+  motion.bob = walkBob + idleBob;
+  return motion;
+};
+
+const derivePoseFromMotion = (motion = {}) => {
+  const intensity = Math.min(1, motion.intensity ?? 0);
+  const phase = motion.phase ?? 0;
+  const idlePhase = motion.idlePhase ?? 0;
+  const stride = Math.sin(phase) * intensity;
+  const counterStride = Math.sin(phase + Math.PI) * intensity;
+  const arm = Math.sin(phase + Math.PI / 2) * intensity;
+  const counterArm = Math.sin(phase - Math.PI / 2) * intensity;
+  const idleSwing = Math.sin(idlePhase) * (1 - intensity) * 0.3;
+  const lean = Math.cos(phase) * intensity * 0.2 + Math.sin(idlePhase * 0.5) * (1 - intensity) * 0.08;
+  const headTilt = Math.sin(phase * 1.5) * intensity * 0.12 + Math.sin(idlePhase * 0.8) * (1 - intensity) * 0.12;
+  return {
+    frontLeg: stride + idleSwing * 0.6,
+    backLeg: counterStride - idleSwing * 0.6,
+    frontArm: -counterArm - idleSwing,
+    backArm: -arm + idleSwing,
+    bob: motion.bob ?? 0,
+    lean,
+    headTilt,
+  };
+};
+
+const getAgentPose = (agent) => derivePoseFromMotion(agent?.motion);
+
+const drawHumanFigure = (ctx, palette, { scale = 1, pose = {}, detail = {} } = {}) => {
   const bodyHeight = HUMAN_BASE_BODY_HEIGHT * scale;
   const bodyWidth = HUMAN_BASE_BODY_WIDTH * scale;
   const headRadius = 4 * scale;
+  const {
+    frontLeg = 0,
+    backLeg = 0,
+    frontArm = 0,
+    backArm = 0,
+    bob = 0,
+    lean = 0,
+    headTilt = 0,
+  } = pose;
+  const {
+    type = "patient",
+    role = null,
+    emergency = false,
+    trimColor: detailTrim,
+    shoeColor: detailShoe,
+    beltColor: detailBelt,
+  } = detail;
+  const legLength = bodyHeight * 0.55;
+  const legWidth = bodyWidth * 0.28;
+  const armLength = bodyHeight * 0.48;
+  const armWidth = bodyWidth * 0.22;
+  const shoulderY = bodyHeight * 0.22;
+  const hipY = bodyHeight * 0.58;
+  const accentWidth = bodyWidth * 0.52;
+  const fabricAccent = palette.fabricLight ?? shiftColor(palette.outfit, 0.28);
+  const fabricShadow = palette.fabricDark ?? shiftColor(palette.outfit, -0.36);
+  const trimColor =
+    detailTrim ?? (type === "staff" ? palette.accent : palette.highlight ?? fabricAccent);
+  const beltColor = detailBelt ?? shiftColor(palette.mid ?? palette.outfit, -0.28);
+  const shoeColor = detailShoe ?? palette.shoe ?? shiftColor(palette.shadow, -0.05);
+  const sleeveColor = palette.mid ?? shiftColor(palette.outfit, -0.08);
+  const cuffColor = shiftColor(trimColor, -0.2);
+
+  const applyFabricTexture = (x, y, width, height, radius, spacing = 3.6 * scale, alpha = 0.14) => {
+    ctx.save();
+    ctx.translate(x, y);
+    drawRoundedRect(ctx, 0, 0, width, height, radius);
+    ctx.clip();
+    ctx.globalAlpha = alpha;
+    ctx.fillStyle = withAlpha(fabricAccent, 0.6);
+    for (let offset = -height; offset < height * 2; offset += spacing) {
+      ctx.beginPath();
+      ctx.moveTo(-width, offset);
+      ctx.lineTo(width * 2, offset + spacing * 0.5);
+      ctx.lineTo(width * 2, offset + spacing);
+      ctx.lineTo(-width, offset + spacing * 0.4);
+      ctx.closePath();
+      ctx.fill();
+    }
+    ctx.restore();
+  };
+
   ctx.save();
-  ctx.fillStyle = withAlpha(palette.shadow, 0.45);
+  const strideSpan = Math.abs(frontLeg - backLeg);
+  ctx.fillStyle = withAlpha(palette.shadow, 0.48 + strideSpan * 0.12);
   ctx.beginPath();
-  ctx.ellipse(0, 3 * scale, bodyWidth * 0.6, 2.8 * scale, 0, 0, Math.PI * 2);
+  ctx.ellipse(0, 3.2 * scale, bodyWidth * (0.62 + strideSpan * 0.14), 2.9 * scale, 0, 0, Math.PI * 2);
   ctx.fill();
-  ctx.translate(0, -bodyHeight);
-  ctx.fillStyle = shiftColor(palette.outfit, -0.18);
-  drawRoundedRect(ctx, -bodyWidth / 2 - 2.2 * scale, bodyHeight * 0.55, bodyWidth + 4.4 * scale, bodyHeight * 0.25, 5 * scale);
-  ctx.fill();
-  const torsoGradient = ctx.createLinearGradient(0, 0, 0, bodyHeight);
-  torsoGradient.addColorStop(0, shiftColor(palette.outfit, 0.22));
-  torsoGradient.addColorStop(1, shiftColor(palette.outfit, -0.2));
+  ctx.translate(0, -bodyHeight + bob * scale);
+
+  const drawLeg = (offset, swing, depth = 0) => {
+    ctx.save();
+    ctx.translate(offset, hipY);
+    ctx.rotate(swing * 0.45);
+    const gradient = ctx.createLinearGradient(0, 0, 0, legLength);
+    gradient.addColorStop(0, shiftColor(palette.mid ?? palette.outfit, depth ? -0.25 : 0.08));
+    gradient.addColorStop(0.6, palette.outfit);
+    gradient.addColorStop(1, shiftColor(fabricShadow, depth ? -0.1 : -0.02));
+    ctx.fillStyle = gradient;
+    drawRoundedRect(ctx, -legWidth / 2, 0, legWidth, legLength, legWidth * 0.5);
+    ctx.fill();
+    applyFabricTexture(
+      -legWidth / 2,
+      0,
+      legWidth,
+      legLength,
+      legWidth * 0.5,
+      3.2 * scale,
+      depth ? 0.08 : 0.15
+    );
+    ctx.strokeStyle = withAlpha(palette.shadow, depth ? 0.35 : 0.28);
+    ctx.lineWidth = 0.6 * scale;
+    drawRoundedRect(ctx, -legWidth / 2, 0, legWidth, legLength, legWidth * 0.5);
+    ctx.stroke();
+    ctx.strokeStyle = withAlpha(trimColor, depth ? 0.18 : 0.28);
+    ctx.lineWidth = 0.5 * scale;
+    ctx.beginPath();
+    const knee = legLength * 0.55;
+    ctx.moveTo(0, knee - 0.4 * scale);
+    ctx.quadraticCurveTo(legWidth * 0.24, knee + 1.1 * scale, 0, knee + 2 * scale);
+    ctx.stroke();
+    const footLength = legWidth * 1.6;
+    const footHeight = 2.4 * scale;
+    const footGradient = ctx.createLinearGradient(
+      -footLength,
+      legLength + footHeight * 0.2,
+      footLength,
+      legLength + footHeight * 0.8
+    );
+    footGradient.addColorStop(0, shiftColor(shoeColor, 0.12));
+    footGradient.addColorStop(0.6, shoeColor);
+    footGradient.addColorStop(1, shiftColor(shoeColor, -0.32));
+    ctx.fillStyle = footGradient;
+    ctx.beginPath();
+    ctx.ellipse(0, legLength + footHeight, footLength, footHeight, 0, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.strokeStyle = withAlpha(palette.shadow, 0.35);
+    ctx.lineWidth = 0.5 * scale;
+    ctx.stroke();
+    ctx.restore();
+  };
+
+  const drawArm = (offset, swing, depth = 0) => {
+    ctx.save();
+    ctx.translate(offset, shoulderY);
+    ctx.rotate(swing * 0.5);
+    const gradient = ctx.createLinearGradient(0, 0, 0, armLength);
+    gradient.addColorStop(0, shiftColor(sleeveColor, depth ? -0.15 : 0.12));
+    gradient.addColorStop(0.7, sleeveColor);
+    gradient.addColorStop(1, shiftColor(sleeveColor, -0.22));
+    ctx.fillStyle = gradient;
+    drawRoundedRect(ctx, -armWidth / 2, 0, armWidth, armLength, armWidth * 0.65);
+    ctx.fill();
+    applyFabricTexture(
+      -armWidth / 2,
+      0,
+      armWidth,
+      armLength,
+      armWidth * 0.6,
+      3 * scale,
+      depth ? 0.06 : 0.12
+    );
+    ctx.fillStyle = cuffColor;
+    drawRoundedRect(
+      ctx,
+      -armWidth / 2,
+      armLength - armWidth * 0.35,
+      armWidth,
+      armWidth * 0.35,
+      armWidth * 0.45
+    );
+    ctx.fill();
+    const handRadius = armWidth * 0.55;
+    const handGradient = ctx.createRadialGradient(0, armLength + handRadius * 0.4, handRadius * 0.4, 0, armLength + handRadius * 0.4, handRadius);
+    handGradient.addColorStop(0, shiftColor(palette.skin, 0.08));
+    handGradient.addColorStop(1, shiftColor(palette.skin, -0.12));
+    ctx.fillStyle = handGradient;
+    ctx.beginPath();
+    ctx.arc(0, armLength + armWidth * 0.2, handRadius, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.strokeStyle = withAlpha(shiftColor(palette.skin, -0.28), 0.35);
+    ctx.lineWidth = 0.4 * scale;
+    ctx.stroke();
+    ctx.restore();
+  };
+
+  // Back limbs first for layering
+  drawLeg(-bodyWidth * 0.22, backLeg, 1);
+  drawArm(-bodyWidth * 0.55, backArm, 1);
+
+  ctx.save();
+  ctx.translate(0, shoulderY);
+  ctx.rotate(lean * 0.15);
+  ctx.translate(0, -shoulderY);
+
+  const torsoGradient = ctx.createLinearGradient(-bodyWidth / 2, 0, bodyWidth / 2, bodyHeight);
+  torsoGradient.addColorStop(0, shiftColor(palette.highlight ?? palette.outfit, 0.12));
+  torsoGradient.addColorStop(0.45, palette.outfit);
+  torsoGradient.addColorStop(1, shiftColor(fabricShadow, -0.05));
   ctx.fillStyle = torsoGradient;
-  drawRoundedRect(ctx, -bodyWidth / 2, 0, bodyWidth, bodyHeight, 4 * scale);
+  drawRoundedRect(ctx, -bodyWidth / 2, 0, bodyWidth, bodyHeight, 4.5 * scale);
   ctx.fill();
-  ctx.fillStyle = palette.accent;
-  drawRoundedRect(ctx, -bodyWidth * 0.25, bodyHeight * 0.32, bodyWidth * 0.5, bodyHeight * 0.22, 2.5 * scale);
+  applyFabricTexture(-bodyWidth / 2, 0, bodyWidth, bodyHeight, 4.5 * scale, 4.2 * scale, 0.12);
+
+  const sheen = ctx.createLinearGradient(-bodyWidth / 2, 0, bodyWidth / 2, 0);
+  sheen.addColorStop(0, withAlpha(trimColor, 0.08));
+  sheen.addColorStop(0.5, withAlpha(trimColor, 0.24));
+  sheen.addColorStop(1, withAlpha(trimColor, 0.08));
+  ctx.fillStyle = sheen;
+  drawRoundedRect(ctx, -bodyWidth / 2, 0, bodyWidth, bodyHeight, 4.5 * scale);
   ctx.fill();
-  ctx.fillStyle = palette.skin;
+
+  const accentGradient = ctx.createLinearGradient(
+    -accentWidth / 2,
+    bodyHeight * 0.28,
+    accentWidth / 2,
+    bodyHeight * 0.28
+  );
+  accentGradient.addColorStop(0, shiftColor(trimColor, 0.2));
+  accentGradient.addColorStop(1, shiftColor(trimColor, -0.18));
+  ctx.fillStyle = accentGradient;
+  drawRoundedRect(ctx, -accentWidth / 2, bodyHeight * 0.36, accentWidth, bodyHeight * 0.18, 2.5 * scale);
+  ctx.fill();
+
+  ctx.fillStyle = beltColor;
+  drawRoundedRect(
+    ctx,
+    -bodyWidth / 2 + 1.2 * scale,
+    bodyHeight * 0.54,
+    bodyWidth - 2.4 * scale,
+    bodyHeight * 0.12,
+    1.6 * scale
+  );
+  ctx.fill();
+  ctx.fillStyle = shiftColor(beltColor, 0.18);
+  ctx.fillRect(-bodyWidth * 0.08, bodyHeight * 0.56, bodyWidth * 0.16, bodyHeight * 0.04);
+
+  if (type === "staff") {
+    ctx.save();
+    ctx.translate(bodyWidth * 0.18, bodyHeight * 0.32);
+    drawRoundedRect(ctx, -3.5 * scale, -2 * scale, 7 * scale, 10 * scale, 1.8 * scale);
+    ctx.fillStyle = "rgba(248, 250, 252, 0.92)";
+    ctx.fill();
+    ctx.fillStyle = withAlpha(trimColor, 0.65);
+    ctx.fillRect(-2.4 * scale, -0.4 * scale, 4.8 * scale, 1.2 * scale);
+    ctx.fillStyle = "rgba(15, 23, 42, 0.82)";
+    ctx.fillRect(-2.4 * scale, 1.8 * scale, 4.8 * scale, 0.8 * scale);
+    ctx.restore();
+  }
+
+  if (
+    type === "staff" &&
+    ["doctor", "surgeon", "dentist", "midwife"].includes(role ?? "")
+  ) {
+    ctx.save();
+    ctx.translate(0, shoulderY * 0.2);
+    ctx.strokeStyle = withAlpha("#d1d5db", 0.9);
+    ctx.lineWidth = 1.1 * scale;
+    ctx.beginPath();
+    ctx.arc(0, 0, headRadius * 1.15, Math.PI * 0.25, Math.PI * 0.75);
+    ctx.stroke();
+    ctx.beginPath();
+    ctx.moveTo(-headRadius * 0.8, headRadius * 0.6);
+    ctx.lineTo(-headRadius * 0.8, headRadius * 0.95);
+    ctx.stroke();
+    ctx.fillStyle = withAlpha("#111827", 0.82);
+    ctx.beginPath();
+    ctx.arc(-headRadius * 0.8, headRadius * 1.02, 1.6 * scale, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.strokeStyle = withAlpha("#d1d5db", 0.9);
+    ctx.lineWidth = 0.8 * scale;
+    ctx.stroke();
+    ctx.restore();
+  }
+
+  if (type === "patient" && emergency) {
+    ctx.save();
+    ctx.translate(bodyWidth * 0.32, bodyHeight * 0.3);
+    ctx.rotate(lean * 0.05);
+    ctx.fillStyle = "rgba(248, 113, 113, 0.72)";
+    ctx.fillRect(-1.6 * scale, -0.4 * scale, 3.2 * scale, 1.6 * scale);
+    ctx.fillStyle = "rgba(248, 250, 252, 0.85)";
+    ctx.fillRect(-1.6 * scale, 0.2 * scale, 3.2 * scale, 0.4 * scale);
+    ctx.restore();
+  }
+
+  ctx.strokeStyle = withAlpha(palette.shadow, 0.32);
+  ctx.lineWidth = 0.6 * scale;
+  drawRoundedRect(ctx, -bodyWidth / 2, 0, bodyWidth, bodyHeight, 4.5 * scale);
+  ctx.stroke();
+  ctx.restore();
+
+  drawLeg(bodyWidth * 0.22, frontLeg, 0);
+  drawArm(bodyWidth * 0.55, frontArm, 0);
+
+  ctx.save();
+  ctx.translate(0, -headRadius * 0.6);
+  ctx.rotate(headTilt * 0.2);
+  const faceGradient = ctx.createLinearGradient(-headRadius, -headRadius, headRadius, headRadius);
+  faceGradient.addColorStop(0, withAlpha(shiftColor(palette.skin, 0.08), 0.96));
+  faceGradient.addColorStop(1, withAlpha(shiftColor(palette.skin, -0.12), 0.98));
+  ctx.fillStyle = faceGradient;
   ctx.beginPath();
-  ctx.arc(0, -headRadius * 0.6, headRadius, 0, Math.PI * 2);
+  ctx.arc(0, 0, headRadius, 0, Math.PI * 2);
   ctx.fill();
-  ctx.fillStyle = palette.hair;
+
+  ctx.fillStyle = shiftColor(palette.skin, -0.08);
   ctx.beginPath();
-  ctx.arc(0, -headRadius * 0.9, headRadius * 1.2, Math.PI * 1.1, Math.PI * 1.9);
-  ctx.lineTo(0, -headRadius * 0.6);
+  ctx.ellipse(-headRadius * 0.82, headRadius * 0.02, headRadius * 0.18, headRadius * 0.28, 0, 0, Math.PI * 2);
+  ctx.ellipse(headRadius * 0.82, headRadius * 0.02, headRadius * 0.18, headRadius * 0.28, 0, 0, Math.PI * 2);
+  ctx.fill();
+
+  const hairGradient = ctx.createLinearGradient(-headRadius, -headRadius, headRadius, headRadius);
+  hairGradient.addColorStop(0, shiftColor(palette.hair, -0.1));
+  hairGradient.addColorStop(0.5, palette.hair);
+  hairGradient.addColorStop(1, palette.hairShine ?? shiftColor(palette.hair, 0.2));
+  ctx.fillStyle = hairGradient;
+  ctx.beginPath();
+  ctx.arc(0, -headRadius * 0.38, headRadius * 1.12, Math.PI * 1.12, Math.PI * 1.88);
+  ctx.quadraticCurveTo(headRadius * 0.95, headRadius * 0.26, 0, headRadius * 0.14);
+  ctx.quadraticCurveTo(-headRadius * 0.95, headRadius * 0.26, -headRadius * 1.08, -headRadius * 0.24);
   ctx.closePath();
   ctx.fill();
+  ctx.strokeStyle = withAlpha(shiftColor(palette.hair, -0.2), 0.5);
+  ctx.lineWidth = 0.7 * scale;
+  ctx.stroke();
+  ctx.fillStyle = withAlpha(palette.hairShine ?? shiftColor(palette.hair, 0.3), 0.2);
+  ctx.beginPath();
+  ctx.ellipse(-headRadius * 0.2, -headRadius * 0.55, headRadius * 0.5, headRadius * 0.28, -0.3, 0, Math.PI * 2);
+  ctx.fill();
+
+  ctx.fillStyle = "rgba(248, 250, 252, 0.85)";
+  ctx.beginPath();
+  ctx.arc(-headRadius * 0.38, -headRadius * 0.12, headRadius * 0.18, 0, Math.PI * 2);
+  ctx.arc(headRadius * 0.38, -headRadius * 0.12, headRadius * 0.18, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.fillStyle = "rgba(15, 23, 42, 0.82)";
+  ctx.beginPath();
+  ctx.arc(-headRadius * 0.32, -headRadius * 0.1, headRadius * 0.1, 0, Math.PI * 2);
+  ctx.arc(headRadius * 0.32, -headRadius * 0.1, headRadius * 0.1, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.fillStyle = "rgba(248, 250, 252, 0.9)";
+  ctx.beginPath();
+  ctx.arc(-headRadius * 0.26, -headRadius * 0.16, headRadius * 0.04, 0, Math.PI * 2);
+  ctx.arc(headRadius * 0.26, -headRadius * 0.16, headRadius * 0.04, 0, Math.PI * 2);
+  ctx.fill();
+
+  ctx.strokeStyle = withAlpha(shiftColor(palette.hair, -0.15), 0.6);
+  ctx.lineWidth = 0.5 * scale;
+  ctx.beginPath();
+  ctx.moveTo(-headRadius * 0.48, -headRadius * 0.32);
+  ctx.quadraticCurveTo(-headRadius * 0.2, -headRadius * 0.22, -headRadius * 0.02, -headRadius * 0.26);
+  ctx.moveTo(headRadius * 0.48, -headRadius * 0.32);
+  ctx.quadraticCurveTo(headRadius * 0.2, -headRadius * 0.22, headRadius * 0.02, -headRadius * 0.26);
+  ctx.stroke();
+
+  ctx.fillStyle = withAlpha("#fda4af", 0.25);
+  ctx.beginPath();
+  ctx.arc(-headRadius * 0.48, headRadius * 0.28, headRadius * 0.24, 0, Math.PI * 2);
+  ctx.arc(headRadius * 0.48, headRadius * 0.28, headRadius * 0.24, 0, Math.PI * 2);
+  ctx.fill();
+
+  ctx.strokeStyle = withAlpha(shiftColor(palette.skin, -0.2), 0.55);
+  ctx.lineWidth = 0.45 * scale;
+  ctx.beginPath();
+  ctx.moveTo(0, headRadius * 0.05);
+  ctx.quadraticCurveTo(headRadius * 0.12, headRadius * 0.34, 0, headRadius * 0.5);
+  ctx.stroke();
+
+  ctx.strokeStyle = withAlpha("#be123c", 0.4);
+  ctx.lineWidth = 0.6 * scale;
+  ctx.beginPath();
+  ctx.moveTo(-headRadius * 0.4, headRadius * 0.32);
+  ctx.quadraticCurveTo(0, headRadius * 0.42, headRadius * 0.4, headRadius * 0.26);
+  ctx.stroke();
+
+  ctx.restore();
   ctx.restore();
 };
 
@@ -3384,7 +4022,7 @@ const drawMiniAvatar = (ctx, palette, { emergency = false } = {}) => {
   const bodyWidth = HUMAN_BASE_BODY_WIDTH * scale;
   ctx.save();
   ctx.translate(0, -6);
-  drawHumanFigure(ctx, palette, { scale });
+  drawHumanFigure(ctx, palette, { scale, detail: { type: "patient", emergency } });
   ctx.restore();
   if (emergency) {
     ctx.save();
@@ -3419,7 +4057,7 @@ const getStaffAvatarPalette = (agent) => {
 };
 
 const drawPatientQueue = (ctx) => {
-  const baseY = GRID_HEIGHT * CANVAS_CELL - 26;
+  const baseY = getGridHeight() * CANVAS_CELL - 26;
   const startX = 36;
   ctx.save();
   ctx.shadowColor = "rgba(15, 23, 42, 0.6)";
@@ -3496,7 +4134,13 @@ const drawPatientAgentsBlueprint = (ctx) => {
     }
     drawMoodGlow(ctx, patient.mood ?? patient.status);
     const palette = getPatientAvatarPalette(patient);
-    drawHumanFigure(ctx, palette, { scale: 0.85 });
+    const motion = ensureAgentMotion(patient);
+    const pose = derivePoseFromMotion(motion);
+    drawHumanFigure(ctx, palette, {
+      scale: 0.85,
+      pose,
+      detail: { type: "patient", emergency: patient.isEmergency },
+    });
     if (patient.isEmergency) {
       ctx.fillStyle = "rgba(239, 68, 68, 0.92)";
       ctx.beginPath();
@@ -3526,12 +4170,24 @@ const drawStaffAgentsBlueprint = (ctx) => {
     ctx.save();
     ctx.translate(px, py);
     const palette = getStaffAvatarPalette(agent);
-    drawHumanFigure(ctx, palette, { scale: 0.75 });
-    ctx.fillStyle = withAlpha(palette.accent, 0.8);
-    ctx.font = "700 9px 'Segoe UI', sans-serif";
+    const motion = ensureAgentMotion(agent);
+    const pose = derivePoseFromMotion(motion);
+    drawHumanFigure(ctx, palette, {
+      scale: 0.75,
+      pose,
+      detail: { type: "staff", role: agent.staff?.role },
+    });
+    ctx.save();
+    ctx.translate(0, -18);
+    drawRoundedRect(ctx, -5, -5, 10, 10, 3);
+    ctx.fillStyle = "rgba(15, 23, 42, 0.78)";
+    ctx.fill();
+    ctx.fillStyle = withAlpha(palette.accent, 0.92);
+    ctx.font = "700 8px 'Segoe UI', sans-serif";
     ctx.textAlign = "center";
     ctx.textBaseline = "middle";
-    ctx.fillText((agent.staff?.role ?? "").charAt(0).toUpperCase(), 0, -22);
+    ctx.fillText((agent.staff?.role ?? "").charAt(0).toUpperCase(), 0, 0);
+    ctx.restore();
     ctx.restore();
   });
   ctx.restore();
@@ -3723,15 +4379,85 @@ const drawRoomLabel = (ctx, room) => {
   ctx.restore();
 };
 
+const getShellFixtureRect = (shell, fixture, thicknessFactor = 0.32, inset = 0.18) => {
+  const cell = CANVAS_CELL;
+  const wall = fixture.wall;
+  const index = clamp(
+    fixture.index ?? 0,
+    0,
+    (wall === "north" || wall === "south" ? shell.width : shell.height) - 1
+  );
+  if (wall === "north" || wall === "south") {
+    const baseX = (shell.x + index) * cell;
+    const span = cell;
+    const width = span * Math.max(0.1, 1 - inset * 2);
+    const x = baseX + span * inset;
+    const height = cell * thicknessFactor;
+    const y =
+      wall === "north"
+        ? shell.y * cell + 2
+        : (shell.y + shell.height) * cell - height - 2;
+    return { x, y, width, height };
+  }
+  const baseY = (shell.y + index) * cell;
+  const span = cell;
+  const height = span * Math.max(0.1, 1 - inset * 2);
+  const y = baseY + span * inset;
+  const width = cell * thicknessFactor;
+  const x =
+    wall === "west"
+      ? shell.x * cell + 2
+      : (shell.x + shell.width) * cell - width - 2;
+  return { x, y, width, height };
+};
+
+const drawBlueprintShell = (ctx, shell) => {
+  const px = shell.x * CANVAS_CELL;
+  const py = shell.y * CANVAS_CELL;
+  const width = shell.width * CANVAS_CELL;
+  const height = shell.height * CANVAS_CELL;
+  ctx.save();
+  const fill = ctx.createLinearGradient(px, py, px + width, py + height);
+  fill.addColorStop(0, "rgba(30, 64, 175, 0.16)");
+  fill.addColorStop(0.5, "rgba(15, 23, 42, 0.12)");
+  fill.addColorStop(1, "rgba(14, 165, 233, 0.18)");
+  ctx.fillStyle = fill;
+  ctx.fillRect(px + 6, py + 6, width - 12, height - 12);
+  ctx.lineWidth = 6;
+  ctx.strokeStyle = "rgba(148, 197, 255, 0.65)";
+  ctx.shadowColor = "rgba(56, 189, 248, 0.3)";
+  ctx.shadowBlur = 14;
+  ctx.strokeRect(px + 3, py + 3, width - 6, height - 6);
+  ctx.restore();
+
+  const windows = shell.windows ?? [];
+  ctx.save();
+  ctx.fillStyle = "rgba(148, 197, 255, 0.45)";
+  windows.forEach((fixture) => {
+    const rect = getShellFixtureRect(shell, fixture, 0.22, 0.24);
+    ctx.fillRect(rect.x, rect.y, rect.width, rect.height);
+  });
+  ctx.restore();
+
+  const doors = shell.doors ?? [];
+  ctx.save();
+  ctx.fillStyle = "rgba(96, 165, 250, 0.8)";
+  doors.forEach((fixture) => {
+    const rect = getShellFixtureRect(shell, fixture, 0.36, 0.12);
+    ctx.fillRect(rect.x, rect.y, rect.width, rect.height);
+  });
+  ctx.restore();
+};
+
 const renderBlueprintCanvas = (ctx) => {
-  const width = GRID_WIDTH * CANVAS_CELL;
-  const height = GRID_HEIGHT * CANVAS_CELL;
+  const width = getGridWidth() * CANVAS_CELL;
+  const height = getGridHeight() * CANVAS_CELL;
   ctx.clearRect(0, 0, width, height);
   const blueprintLayer = getBlueprintBuffer(width, height);
   ctx.drawImage(blueprintLayer, 0, 0);
 
   ctx.save();
-  const corridorY = CORRIDOR_Y * CANVAS_CELL;
+  const corridorY = getCorridorY() * CANVAS_CELL;
   const walkwayGradient = ctx.createLinearGradient(0, corridorY - 18, 0, corridorY + 18);
   walkwayGradient.addColorStop(0, "rgba(15, 23, 42, 0)");
   walkwayGradient.addColorStop(0.5, "rgba(30, 64, 175, 0.18)");
@@ -3742,8 +4468,8 @@ const renderBlueprintCanvas = (ctx) => {
 
   const emptyTile = getEmptyTileSprite();
   const lockedTile = getLockedTileSprite();
-  for (let y = 0; y < GRID_HEIGHT; y++) {
-    for (let x = 0; x < GRID_WIDTH; x++) {
+  for (let y = 0; y < getGridHeight(); y++) {
+    for (let x = 0; x < getGridWidth(); x++) {
       const px = x * CANVAS_CELL;
       const py = y * CANVAS_CELL;
       if (!isTileUnlocked(x, y)) {
@@ -3792,6 +4518,8 @@ const renderBlueprintCanvas = (ctx) => {
     ctx.restore();
   });
 
+  state.shells.forEach((shell) => drawBlueprintShell(ctx, shell));
+
   state.rooms.forEach((room) => {
     drawRoomAura(ctx, room);
   });
@@ -3820,51 +4548,89 @@ const renderBlueprintCanvas = (ctx) => {
   drawPatientQueue(ctx);
 };
 
-const isoProjectBase = (x, y) => ({
-  x: (x - y) * (ISO_TILE_WIDTH / 2),
-  y: (x + y) * (ISO_TILE_HEIGHT / 2),
-});
-
 const createIsoMapper = (width, height) => {
-  const corners = [
-    isoProjectBase(0, 0),
-    isoProjectBase(GRID_WIDTH, 0),
-    isoProjectBase(0, GRID_HEIGHT),
-    isoProjectBase(GRID_WIDTH, GRID_HEIGHT),
-  ];
-  const minX = Math.min(...corners.map((point) => point.x));
-  const maxX = Math.max(...corners.map((point) => point.x));
-  const minY = Math.min(...corners.map((point) => point.y));
-  const maxY = Math.max(...corners.map((point) => point.y));
-  const offsetX = (width - (maxX - minX)) / 2 - minX;
-  const offsetY = Math.max(48, 68 - minY);
-  const project = (x, y) => {
-    const base = isoProjectBase(x, y);
+  const gridWidth = getGridWidth();
+  const gridHeight = getGridHeight();
+  const centerX = gridWidth / 2;
+  const centerY = gridHeight / 2;
+  const yaw = showcaseRotation + ISO_BASE_YAW;
+  const cosYaw = Math.cos(yaw);
+  const sinYaw = Math.sin(yaw);
+  const cosPitch = Math.cos(ISO_CAMERA_PITCH);
+  const sinPitch = Math.sin(ISO_CAMERA_PITCH);
+  const projectRaw = (x, y, z = 0) => {
+    const dx = x - centerX;
+    const dy = y - centerY;
+    const rotatedX = dx * cosYaw - dy * sinYaw;
+    const rotatedY = dx * sinYaw + dy * cosYaw;
+    const projectedY = rotatedY * cosPitch - z * sinPitch;
+    const depth = rotatedY * sinPitch + z * cosPitch;
     return {
-      x: base.x + offsetX,
-      y: base.y + offsetY,
+      x: rotatedX * ISO_HORIZONTAL_SCALE,
+      y: projectedY * ISO_VERTICAL_SCALE,
+      depth,
     };
   };
-  const invTileWidth = 2 / ISO_TILE_WIDTH;
-  const invTileHeight = 2 / ISO_TILE_HEIGHT;
+
+  const boundsCorners = [
+    projectRaw(0, 0),
+    projectRaw(gridWidth, 0),
+    projectRaw(gridWidth, gridHeight),
+    projectRaw(0, gridHeight),
+    projectRaw(0, 0, 1),
+    projectRaw(gridWidth, 0, 1),
+    projectRaw(gridWidth, gridHeight, 1),
+    projectRaw(0, gridHeight, 1),
+  ];
+  const minX = Math.min(...boundsCorners.map((point) => point.x));
+  const maxX = Math.max(...boundsCorners.map((point) => point.x));
+  const minY = Math.min(...boundsCorners.map((point) => point.y));
+  const maxY = Math.max(...boundsCorners.map((point) => point.y));
+  const offsetX = (width - (maxX - minX)) / 2 - minX;
+  const verticalMargin = Math.max(52, height * 0.08);
+  let offsetY = verticalMargin - minY;
+  const bottom = maxY + offsetY;
+  const maxBottom = height - verticalMargin;
+  if (bottom > maxBottom) {
+    offsetY -= bottom - maxBottom;
+  }
+
+  const project = (x, y, z = 0) => {
+    const raw = projectRaw(x, y, z);
+    return {
+      x: raw.x + offsetX,
+      y: raw.y + offsetY,
+      depth: raw.depth,
+    };
+  };
+
   const unproject = (px, py) => {
     const localX = px - offsetX;
     const localY = py - offsetY;
-    const scaledX = localX * invTileWidth;
-    const scaledY = localY * invTileHeight;
-    const tileX = (scaledY + scaledX) / 2;
-    const tileY = (scaledY - scaledX) / 2;
-    return { x: tileX, y: tileY };
+    const rotatedX = localX / ISO_HORIZONTAL_SCALE;
+    const rotatedY = localY / (ISO_VERTICAL_SCALE * cosPitch);
+    const dx = rotatedX * cosYaw + rotatedY * sinYaw;
+    const dy = -rotatedX * sinYaw + rotatedY * cosYaw;
+    return {
+      x: dx + centerX,
+      y: dy + centerY,
+    };
   };
-  return { project, unproject, offsetX, offsetY };
+
+  return { project, projectRaw, unproject, offsetX, offsetY, yaw, cosYaw, sinYaw };
 };
 
 const getIsoMapper = () => {
-  const width = GRID_WIDTH * CANVAS_CELL;
-  const height = GRID_HEIGHT * CANVAS_CELL;
-  if (!isoMapperCache || isoMapperCache.width !== width || isoMapperCache.height !== height) {
+  const width = getGridWidth() * CANVAS_CELL;
+  const height = getGridHeight() * CANVAS_CELL;
+  if (
+    !isoMapperCache ||
+    isoMapperCache.width !== width ||
+    isoMapperCache.height !== height ||
+    isoMapperCache.rotation !== showcaseRotation
+  ) {
     const mapper = createIsoMapper(width, height);
-    isoMapperCache = { ...mapper, width, height };
+    isoMapperCache = { ...mapper, width, height, rotation: showcaseRotation };
   }
   return isoMapperCache;
 };
@@ -3894,6 +4660,52 @@ const sampleIsoPoint = (corners, u, v) => {
     x: lerp(top.x, bottom.x, v),
     y: lerp(top.y, bottom.y, v),
   };
+};
+
+const drawIsoFloorTiling = (
+  ctx,
+  corners,
+  columns,
+  rows,
+  { color, highlight, shadow, lineWidth = 1 } = {}
+) => {
+  if (!columns || !rows) return;
+  const clampCount = (value) => Math.max(0, Math.floor(value));
+  const verticalLines = clampCount(columns);
+  const horizontalLines = clampCount(rows);
+  if (verticalLines < 2 && horizontalLines < 2) return;
+
+  const drawLines = (strokeStyle, offsetX = 0, offsetY = 0) => {
+    if (!strokeStyle) return;
+    ctx.strokeStyle = strokeStyle;
+    ctx.lineWidth = lineWidth;
+    for (let col = 1; col < verticalLines; col += 1) {
+      const u = col / verticalLines;
+      const start = sampleIsoPoint(corners, u, 0);
+      const end = sampleIsoPoint(corners, u, 1);
+      ctx.beginPath();
+      ctx.moveTo(start.x + offsetX, start.y + offsetY);
+      ctx.lineTo(end.x + offsetX, end.y + offsetY);
+      ctx.stroke();
+    }
+    for (let row = 1; row < horizontalLines; row += 1) {
+      const v = row / horizontalLines;
+      const start = sampleIsoPoint(corners, 0, v);
+      const end = sampleIsoPoint(corners, 1, v);
+      ctx.beginPath();
+      ctx.moveTo(start.x + offsetX, start.y + offsetY);
+      ctx.lineTo(end.x + offsetX, end.y + offsetY);
+      ctx.stroke();
+    }
+  };
+
+  ctx.save();
+  drawIsoPolygon(ctx, corners);
+  ctx.clip();
+  drawLines(color, 0, 0);
+  drawLines(highlight, -0.8, -0.8);
+  drawLines(shadow, 0.8, 0.8);
+  ctx.restore();
 };
 
 const drawIsoFloorPattern = (ctx, corners, theme) => {
@@ -3968,6 +4780,15 @@ const lerpPoint = (a, b, t) => ({
   y: a.y + (b.y - a.y) * t,
 });
 
+const distance = (a, b) => Math.hypot(a.x - b.x, a.y - b.y);
+
+const WALL_NORMALS = {
+  north: { x: 0, y: -1 },
+  east: { x: 1, y: 0 },
+  south: { x: 0, y: 1 },
+  west: { x: -1, y: 0 },
+};
+
 const buildWallGeometry = (corners, topCorners, room) => ({
   north: {
     bottomStart: corners[0],
@@ -3998,6 +4819,82 @@ const buildWallGeometry = (corners, topCorners, room) => ({
     length: Math.max(1, room.height),
   },
 });
+
+const renderWallTexture = (
+  ctx,
+  geometry,
+  { tone = "#1f2937", mortar, brightness = 0 } = {}
+) => {
+  const polygon = [geometry.bottomStart, geometry.bottomEnd, geometry.topEnd, geometry.topStart];
+  const wallHeight = distance(geometry.bottomStart, geometry.topStart);
+  const wallWidth = distance(geometry.bottomStart, geometry.bottomEnd);
+  if (wallHeight <= 6 || wallWidth <= 6) return;
+
+  const courseCount = Math.max(2, Math.round(wallHeight / 14));
+  const brickCount = Math.max(2, Math.round(wallWidth / 32));
+  const mortarTone = mortar ?? shiftColor(tone, -0.45);
+  const horizontalStroke = withAlpha(shiftColor(mortarTone, 0.12 + brightness * 0.08), 0.32);
+  const verticalStroke = withAlpha(shiftColor(mortarTone, 0.02 + brightness * 0.1), 0.28);
+  const verticalAltStroke = withAlpha(shiftColor(mortarTone, -0.18 + brightness * 0.08), 0.26);
+  const bandOpacity = 0.08 + brightness * 0.05;
+
+  ctx.save();
+  drawIsoPolygon(ctx, polygon);
+  ctx.clip();
+
+  for (let row = 0; row < courseCount; row += 1) {
+    const t0 = row / courseCount;
+    const t1 = (row + 1) / courseCount;
+    const bottomLeft = lerpPoint(geometry.bottomStart, geometry.topStart, t0);
+    const bottomRight = lerpPoint(geometry.bottomEnd, geometry.topEnd, t0);
+    const topRight = lerpPoint(geometry.bottomEnd, geometry.topEnd, t1);
+    const topLeft = lerpPoint(geometry.bottomStart, geometry.topStart, t1);
+    const gradient = ctx.createLinearGradient(bottomLeft.x, bottomLeft.y, topLeft.x, topLeft.y);
+    gradient.addColorStop(0, withAlpha(shiftColor(tone, 0.18 + brightness * 0.1), bandOpacity));
+    gradient.addColorStop(1, withAlpha(shiftColor(tone, -0.26 + brightness * 0.08), bandOpacity + 0.04));
+    ctx.fillStyle = gradient;
+    ctx.beginPath();
+    ctx.moveTo(bottomLeft.x, bottomLeft.y);
+    ctx.lineTo(bottomRight.x, bottomRight.y);
+    ctx.lineTo(topRight.x, topRight.y);
+    ctx.lineTo(topLeft.x, topLeft.y);
+    ctx.closePath();
+    ctx.fill();
+  }
+
+  ctx.strokeStyle = horizontalStroke;
+  ctx.lineWidth = 1.05;
+  for (let row = 1; row < courseCount; row += 1) {
+    const t = row / courseCount;
+    const start = lerpPoint(geometry.bottomStart, geometry.topStart, t);
+    const end = lerpPoint(geometry.bottomEnd, geometry.topEnd, t);
+    ctx.beginPath();
+    ctx.moveTo(start.x, start.y);
+    ctx.lineTo(end.x, end.y);
+    ctx.stroke();
+  }
+
+  const spacing = wallWidth / brickCount;
+  for (let row = 0; row < courseCount; row += 1) {
+    const offset = row % 2 === 0 ? 0 : spacing / 2;
+    const startCol = offset === 0 ? 1 : 0;
+    for (let col = startCol; col < brickCount; col += 1) {
+      const along = offset + col * spacing;
+      if (along <= 0 || along >= wallWidth) continue;
+      const u = along / wallWidth;
+      const base = lerpPoint(geometry.bottomStart, geometry.bottomEnd, u);
+      const top = lerpPoint(geometry.topStart, geometry.topEnd, u);
+      ctx.strokeStyle = (col + row) % 2 === 0 ? verticalStroke : verticalAltStroke;
+      ctx.lineWidth = 0.95;
+      ctx.beginPath();
+      ctx.moveTo(base.x, base.y);
+      ctx.lineTo(top.x, top.y);
+      ctx.stroke();
+    }
+  }
+
+  ctx.restore();
+};
 
 const sampleWallSegment = (wall, index, inset = 0.18) => {
   if (!wall || !wall.length) return null;
@@ -4062,69 +4959,78 @@ const drawIsoWindowPanel = (ctx, segment, accent) => {
   ctx.restore();
 };
 
-const drawIsoDoorway = (ctx, segment, accent) => {
+const drawIsoDoorway = (ctx, segment, accent, interiorPoint = null) => {
   if (!segment) return;
-  const { bottomLeft, bottomRight } = segment;
+  const { bottomLeft, bottomRight, topLeft, topRight } = segment;
   const center = lerpPoint(bottomLeft, bottomRight, 0.5);
-  const widthVec = {
-    x: (bottomRight.x - bottomLeft.x) * 0.45,
-    y: (bottomRight.y - bottomLeft.y) * 0.45,
+  const baseVec = {
+    x: bottomRight.x - bottomLeft.x,
+    y: bottomRight.y - bottomLeft.y,
   };
-  const leftBase = {
-    x: center.x - widthVec.x,
-    y: center.y - widthVec.y,
+  const normal = {
+    x: baseVec.y,
+    y: -baseVec.x,
   };
-  const rightBase = {
-    x: center.x + widthVec.x,
-    y: center.y + widthVec.y,
-  };
-  const heightVec = { x: 0, y: -ISO_WALL_HEIGHT + 6 };
-  const topLeft = { x: leftBase.x + heightVec.x, y: leftBase.y + heightVec.y };
-  const topRight = { x: rightBase.x + heightVec.x, y: rightBase.y + heightVec.y };
-
+  const magnitude = Math.hypot(normal.x, normal.y) || 1;
+  let unitNormal = { x: normal.x / magnitude, y: normal.y / magnitude };
+  if (interiorPoint) {
+    const toInterior = { x: interiorPoint.x - center.x, y: interiorPoint.y - center.y };
+    if (toInterior.x * unitNormal.x + toInterior.y * unitNormal.y > 0) {
+      unitNormal = { x: -unitNormal.x, y: -unitNormal.y };
+    }
+  }
+  const walkwayDepth = 34;
+  const flare = { x: baseVec.x * 0.12, y: baseVec.y * 0.12 };
   const walkway = [
-    leftBase,
-    rightBase,
-    { x: rightBase.x + 18, y: rightBase.y + 28 },
-    { x: leftBase.x - 18, y: leftBase.y + 28 },
+    { x: bottomLeft.x, y: bottomLeft.y },
+    { x: bottomRight.x, y: bottomRight.y },
+    {
+      x: bottomRight.x + unitNormal.x * walkwayDepth + flare.x,
+      y: bottomRight.y + unitNormal.y * walkwayDepth + flare.y,
+    },
+    {
+      x: bottomLeft.x + unitNormal.x * walkwayDepth - flare.x,
+      y: bottomLeft.y + unitNormal.y * walkwayDepth - flare.y,
+    },
   ];
   ctx.save();
-  ctx.beginPath();
-  ctx.moveTo(walkway[0].x, walkway[0].y);
-  for (let i = 1; i < walkway.length; i++) {
-    ctx.lineTo(walkway[i].x, walkway[i].y);
-  }
-  ctx.closePath();
+  drawIsoPolygon(ctx, walkway);
   const walkGradient = ctx.createLinearGradient(
     (walkway[0].x + walkway[1].x) / 2,
-    walkway[0].y,
+    (walkway[0].y + walkway[1].y) / 2,
     (walkway[2].x + walkway[3].x) / 2,
-    walkway[2].y
+    (walkway[2].y + walkway[3].y) / 2
   );
-  walkGradient.addColorStop(0, withAlpha(shiftColor(accent, 0.35), 0.45));
-  walkGradient.addColorStop(1, withAlpha("#0f172a", 0.85));
+  walkGradient.addColorStop(0, withAlpha(shiftColor(accent, 0.4), 0.32));
+  walkGradient.addColorStop(1, withAlpha("#0f172a", 0.88));
   ctx.fillStyle = walkGradient;
   ctx.fill();
-  ctx.strokeStyle = withAlpha(accent, 0.35);
-  ctx.lineWidth = 1;
+  ctx.strokeStyle = withAlpha(accent, 0.4);
+  ctx.lineWidth = 1.1;
   ctx.stroke();
   ctx.restore();
 
   ctx.save();
   ctx.beginPath();
-  ctx.moveTo(leftBase.x, leftBase.y);
-  ctx.lineTo(rightBase.x, rightBase.y);
+  ctx.moveTo(bottomLeft.x, bottomLeft.y);
+  ctx.lineTo(bottomRight.x, bottomRight.y);
   ctx.lineTo(topRight.x, topRight.y);
   ctx.lineTo(topLeft.x, topLeft.y);
   ctx.closePath();
-  const doorGradient = ctx.createLinearGradient(leftBase.x, leftBase.y, topRight.x, topRight.y);
-  doorGradient.addColorStop(0, withAlpha("#0f172a", 0.95));
-  doorGradient.addColorStop(1, withAlpha(shiftColor(accent, 0.2), 0.55));
+  const doorGradient = ctx.createLinearGradient(bottomLeft.x, bottomLeft.y, topRight.x, topRight.y);
+  doorGradient.addColorStop(0, withAlpha("#0f172a", 0.96));
+  doorGradient.addColorStop(1, withAlpha(shiftColor(accent, 0.2), 0.6));
   ctx.fillStyle = doorGradient;
   ctx.fill();
-  ctx.strokeStyle = withAlpha(accent, 0.65);
-  ctx.lineWidth = 1.1;
+  ctx.strokeStyle = withAlpha(accent, 0.68);
+  ctx.lineWidth = 1.2;
   ctx.stroke();
+  const lintel = lerpPoint(topLeft, topRight, 0.5);
+  const entryGlow = ctx.createRadialGradient(lintel.x, lintel.y - 6, 2, lintel.x, lintel.y - 6, 26);
+  entryGlow.addColorStop(0, withAlpha(accent, 0.22));
+  entryGlow.addColorStop(1, "rgba(15, 23, 42, 0)");
+  ctx.fillStyle = entryGlow;
+  ctx.fill();
   ctx.restore();
 };
 
@@ -4140,6 +5046,173 @@ const drawIsoRoomGlyph = (ctx, project, room, glyph, accent) => {
   ctx.shadowBlur = 16;
   ctx.fillStyle = withAlpha(accent, 0.92);
   ctx.fillText(glyph, center.x, center.y - ISO_WALL_HEIGHT * 0.3);
+  ctx.restore();
+};
+
+const drawIsoCampusShell = (ctx, project, shell) => {
+  const corners = [
+    project(shell.x, shell.y, 0),
+    project(shell.x + shell.width, shell.y, 0),
+    project(shell.x + shell.width, shell.y + shell.height, 0),
+    project(shell.x, shell.y + shell.height, 0),
+  ];
+  const topCorners = [
+    project(shell.x, shell.y, 1),
+    project(shell.x + shell.width, shell.y, 1),
+    project(shell.x + shell.width, shell.y + shell.height, 1),
+    project(shell.x, shell.y + shell.height, 1),
+  ];
+  const interiorPoint = project(shell.x + shell.width / 2, shell.y + shell.height / 2, 0);
+  const accent = "#60a5fa";
+  const facadeBase = "#1f2937";
+  const floorTone = "#334155";
+  const capTone = "#475569";
+
+  const wallGeometry = buildWallGeometry(corners, topCorners, shell);
+  const walls = Object.entries(wallGeometry)
+    .map(([id, geometry]) => {
+      const brightness = clamp(
+        0.34 + 0.54 * Math.max(0, WALL_NORMALS[id].x * LIGHT_DIRECTION.x + WALL_NORMALS[id].y * LIGHT_DIRECTION.y),
+        0.28,
+        0.88
+      );
+      const depth = (geometry.bottomStart.depth + geometry.bottomEnd.depth) / 2;
+      return { id, geometry, brightness, depth };
+    })
+    .sort((a, b) => a.depth - b.depth);
+  const frontWallId = walls[walls.length - 1]?.id ?? "south";
+
+  const shadowOffset = {
+    x: (LIGHT_DIRECTION.y - LIGHT_DIRECTION.x) * 22,
+    y: (Math.abs(LIGHT_DIRECTION.x) + Math.abs(LIGHT_DIRECTION.y)) * 18 + 10,
+  };
+  const shadowPoints = corners.map((point) => ({
+    x: point.x + shadowOffset.x,
+    y: point.y + shadowOffset.y,
+  }));
+  ctx.save();
+  ctx.globalAlpha = 0.26;
+  drawIsoPolygon(ctx, shadowPoints);
+  ctx.fillStyle = "rgba(8, 15, 32, 0.95)";
+  ctx.fill();
+  ctx.restore();
+
+  ctx.save();
+  drawIsoPolygon(ctx, corners);
+  const floorGradient = ctx.createLinearGradient(corners[0].x, corners[0].y, corners[2].x, corners[2].y);
+  floorGradient.addColorStop(0, withAlpha(shiftColor(floorTone, 0.28), 0.96));
+  floorGradient.addColorStop(0.55, withAlpha(floorTone, 0.94));
+  floorGradient.addColorStop(1, withAlpha(shiftColor(floorTone, -0.18), 0.97));
+  ctx.fillStyle = floorGradient;
+  ctx.fill();
+  ctx.strokeStyle = withAlpha(accent, 0.45);
+  ctx.lineWidth = 1.2;
+  ctx.stroke();
+  ctx.restore();
+
+  drawIsoFloorTiling(
+    ctx,
+    corners,
+    Math.max(2, shell.width * 2),
+    Math.max(2, shell.height * 2),
+    {
+      color: withAlpha(shiftColor(floorTone, -0.35), 0.32 + showcaseAnimation.pulse * 0.02),
+      highlight: withAlpha(shiftColor(floorTone, 0.25), 0.18 + showcaseAnimation.wave * 0.015),
+      shadow: withAlpha(shiftColor(floorTone, -0.55), 0.36),
+      lineWidth: 0.9,
+    }
+  );
+
+  const drawWallFixtures = (entry) => {
+    const { id, geometry } = entry;
+    const windows = (shell.windows ?? []).filter((fixture) => fixture.wall === id);
+    windows.forEach((fixture) => {
+      const segment = sampleWallSegment(geometry, fixture.index, id === frontWallId ? 0.22 : 0.18);
+      if (!segment) return;
+      drawIsoWindowPanel(ctx, segment, accent);
+      const glowCenter = lerpPoint(segment.bottomLeft, segment.bottomRight, 0.5);
+      ctx.save();
+      const paneGlow = ctx.createRadialGradient(glowCenter.x, glowCenter.y - 6, 2, glowCenter.x, glowCenter.y - 6, 20);
+      paneGlow.addColorStop(0, withAlpha(accent, 0.16));
+      paneGlow.addColorStop(1, "rgba(15, 23, 42, 0)");
+      ctx.fillStyle = paneGlow;
+      ctx.globalAlpha = 0.8;
+      ctx.beginPath();
+      ctx.ellipse(glowCenter.x, glowCenter.y - 4, 18, 10, 0, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.restore();
+    });
+    const doors = (shell.doors ?? []).filter((fixture) => fixture.wall === id);
+    doors.forEach((fixture) => {
+      const inset = id === frontWallId ? 0.24 : 0.18;
+      const segment = sampleWallSegment(geometry, fixture.index, inset);
+      if (!segment) return;
+      if (id === frontWallId) {
+        drawIsoDoorway(ctx, segment, accent, interiorPoint);
+      } else {
+        drawIsoDoorPanel(ctx, segment, accent);
+      }
+    });
+  };
+
+  walls.forEach((entry) => {
+    const { geometry, brightness } = entry;
+    const polygon = [geometry.bottomStart, geometry.bottomEnd, geometry.topEnd, geometry.topStart];
+    ctx.save();
+    drawIsoPolygon(ctx, polygon);
+    const gradient = ctx.createLinearGradient(
+      geometry.bottomStart.x,
+      geometry.bottomStart.y,
+      geometry.topStart.x,
+      geometry.topStart.y
+    );
+    gradient.addColorStop(0, withAlpha(shiftColor(facadeBase, -0.3 + brightness * 0.08), 0.98));
+    gradient.addColorStop(0.65, withAlpha(shiftColor(facadeBase, -0.12 + brightness * 0.18), 0.95));
+    gradient.addColorStop(1, withAlpha(shiftColor(facadeBase, 0.18 + brightness * 0.22), 0.9));
+    ctx.fillStyle = gradient;
+    ctx.fill();
+    renderWallTexture(ctx, geometry, {
+      tone: shiftColor(facadeBase, brightness * 0.05),
+      mortar: shiftColor(facadeBase, -0.48),
+      brightness,
+    });
+    drawIsoPolygon(ctx, polygon);
+    ctx.strokeStyle = withAlpha(shiftColor(accent, brightness * 0.18 - 0.1), 0.58);
+    ctx.lineWidth = 1.05;
+    ctx.stroke();
+    ctx.restore();
+
+    drawWallFixtures(entry);
+
+    ctx.save();
+    ctx.beginPath();
+    ctx.moveTo(geometry.bottomStart.x, geometry.bottomStart.y);
+    ctx.lineTo(geometry.bottomEnd.x, geometry.bottomEnd.y);
+    ctx.strokeStyle = withAlpha(shiftColor(accent, brightness * 0.4 + 0.15), 0.35);
+    ctx.lineWidth = 0.9;
+    ctx.stroke();
+    ctx.restore();
+  });
+
+  ctx.save();
+  drawIsoPolygon(ctx, topCorners);
+  const capGradient = ctx.createLinearGradient(topCorners[0].x, topCorners[0].y, topCorners[2].x, topCorners[2].y);
+  capGradient.addColorStop(0, withAlpha(shiftColor(capTone, 0.22), 0.86));
+  capGradient.addColorStop(1, withAlpha(shiftColor(capTone, -0.28), 0.92));
+  ctx.fillStyle = capGradient;
+  ctx.fill();
+  ctx.strokeStyle = withAlpha(accent, 0.38);
+  ctx.lineWidth = 1.05;
+  ctx.stroke();
+  ctx.restore();
+
+  ctx.save();
+  drawIsoPolygon(ctx, corners);
+  const glow = ctx.createRadialGradient(interiorPoint.x, interiorPoint.y, 12, interiorPoint.x, interiorPoint.y, 120);
+  glow.addColorStop(0, withAlpha(accent, 0.18));
+  glow.addColorStop(1, "rgba(15, 23, 42, 0)");
+  ctx.fillStyle = glow;
+  ctx.fill();
   ctx.restore();
 };
 
@@ -4318,113 +5391,137 @@ const drawIsoBuildOverlay = (ctx, project, preview) => {
 
 const drawIsoRoomShowcase = (ctx, project, room) => {
   const corners = [
-    project(room.x, room.y),
-    project(room.x + room.width, room.y),
-    project(room.x + room.width, room.y + room.height),
-    project(room.x, room.y + room.height),
+    project(room.x, room.y, 0),
+    project(room.x + room.width, room.y, 0),
+    project(room.x + room.width, room.y + room.height, 0),
+    project(room.x, room.y + room.height, 0),
   ];
-  const topCorners = corners.map((point) => ({ x: point.x, y: point.y - ISO_WALL_HEIGHT }));
+  const topCorners = [
+    project(room.x, room.y, 1),
+    project(room.x + room.width, room.y, 1),
+    project(room.x + room.width, room.y + room.height, 1),
+    project(room.x, room.y + room.height, 1),
+  ];
   const theme = getInteriorTheme(room.interiorId);
   const accent = theme.palette?.accent ?? "#38bdf8";
   const mid = theme.palette?.mid ?? theme.palette?.base ?? "#475569";
+  const baseTone = theme.palette?.base ?? "#1f2937";
   const glyph = getRoomGlyph(room.type);
   const recentlyBuilt = isRoomRecentlyBuilt(room);
   const wallGeometry = buildWallGeometry(corners, topCorners, room);
+  const walls = Object.entries(wallGeometry)
+    .map(([id, geometry]) => {
+      const brightness = clamp(
+        0.36 + 0.5 * Math.max(0, WALL_NORMALS[id].x * LIGHT_DIRECTION.x + WALL_NORMALS[id].y * LIGHT_DIRECTION.y),
+        0.3,
+        0.9
+      );
+      const depth = (geometry.bottomStart.depth + geometry.bottomEnd.depth) / 2;
+      return { id, geometry, brightness, depth };
+    })
+    .sort((a, b) => a.depth - b.depth);
+  const frontWallId = walls[walls.length - 1]?.id ?? "south";
+  const center = project(room.x + room.width / 2, room.y + room.height / 2, 0);
 
-  const drawWallFixtures = (wallId) => {
-    const geometry = wallGeometry[wallId];
-    if (!geometry) return;
-    const windows = (room.windows ?? []).filter((fixture) => fixture.wall === wallId);
+  const shadowOffset = {
+    x: (LIGHT_DIRECTION.y - LIGHT_DIRECTION.x) * 14,
+    y: (Math.abs(LIGHT_DIRECTION.x) + Math.abs(LIGHT_DIRECTION.y)) * 12 + 6,
+  };
+  const shadowPoints = corners.map((point) => ({
+    x: point.x + shadowOffset.x,
+    y: point.y + shadowOffset.y,
+  }));
+  ctx.save();
+  ctx.globalAlpha = 0.24;
+  drawIsoPolygon(ctx, shadowPoints);
+  ctx.fillStyle = "rgba(8, 15, 32, 0.92)";
+  ctx.fill();
+  ctx.restore();
+
+  ctx.save();
+  drawIsoPolygon(ctx, corners);
+  const floorGradient = ctx.createLinearGradient(corners[0].x, corners[0].y, corners[2].x, corners[2].y);
+  floorGradient.addColorStop(0, withAlpha(shiftColor(mid, 0.32), 0.97));
+  floorGradient.addColorStop(0.6, withAlpha(mid, 0.94));
+  floorGradient.addColorStop(1, withAlpha(shiftColor(mid, -0.18), 0.95));
+  ctx.fillStyle = floorGradient;
+  ctx.fill();
+  ctx.strokeStyle = withAlpha(accent, 0.68);
+  ctx.lineWidth = 1.3;
+  ctx.stroke();
+  ctx.restore();
+
+  drawIsoFloorPattern(ctx, corners, theme);
+
+  const drawWallFixtures = (entry) => {
+    const { id, geometry } = entry;
+    const windows = (room.windows ?? []).filter((fixture) => fixture.wall === id);
     windows.forEach((fixture) => {
-      const segment = sampleWallSegment(geometry, fixture.index);
-      if (!segment) return;
-      if (wallId === "south") {
+      if (id === frontWallId) {
         return;
       }
+      const segment = sampleWallSegment(geometry, fixture.index, 0.18);
+      if (!segment) return;
       drawIsoWindowPanel(ctx, segment, accent);
     });
-    const doors = (room.doors ?? []).filter((fixture) => fixture.wall === wallId);
+    const doors = (room.doors ?? []).filter((fixture) => fixture.wall === id);
     doors.forEach((fixture) => {
-      const inset = wallId === "south" ? 0.25 : 0.18;
+      const inset = id === frontWallId ? 0.24 : 0.18;
       const segment = sampleWallSegment(geometry, fixture.index, inset);
       if (!segment) return;
-      if (wallId === "south") {
-        drawIsoDoorway(ctx, segment, accent);
+      if (id === frontWallId) {
+        drawIsoDoorway(ctx, segment, accent, center);
       } else {
         drawIsoDoorPanel(ctx, segment, accent);
       }
     });
   };
 
-  ctx.save();
-  const shadowPoints = corners.map((point) => ({ x: point.x + 6, y: point.y + 10 }));
-  ctx.globalAlpha = 0.25;
-  drawIsoPolygon(ctx, shadowPoints);
-  ctx.fillStyle = "rgba(8, 15, 32, 1)";
-  ctx.fill();
-  ctx.restore();
+  walls.forEach((entry) => {
+    const { geometry, brightness } = entry;
+    const polygon = [geometry.bottomStart, geometry.bottomEnd, geometry.topEnd, geometry.topStart];
+    ctx.save();
+    drawIsoPolygon(ctx, polygon);
+    const gradient = ctx.createLinearGradient(
+      geometry.bottomStart.x,
+      geometry.bottomStart.y,
+      geometry.topStart.x,
+      geometry.topStart.y
+    );
+    gradient.addColorStop(0, withAlpha(shiftColor(baseTone, -0.22 + brightness * 0.08), 0.97));
+    gradient.addColorStop(0.65, withAlpha(shiftColor(baseTone, -0.08 + brightness * 0.2), 0.94));
+    gradient.addColorStop(1, withAlpha(shiftColor(baseTone, 0.18 + brightness * 0.25), 0.9));
+    ctx.fillStyle = gradient;
+    ctx.fill();
+    renderWallTexture(ctx, geometry, {
+      tone: shiftColor(baseTone, brightness * 0.06),
+      mortar: shiftColor(baseTone, -0.5),
+      brightness,
+    });
+    drawIsoPolygon(ctx, polygon);
+    ctx.strokeStyle = withAlpha(shiftColor(accent, brightness * 0.22 - 0.12), 0.52);
+    ctx.lineWidth = 1.05;
+    ctx.stroke();
+    ctx.restore();
 
-  ctx.save();
-  drawIsoPolygon(ctx, [corners[1], corners[2], topCorners[2], topCorners[1]]);
-  const rightGradient = ctx.createLinearGradient(corners[1].x, corners[1].y, topCorners[2].x, topCorners[2].y);
-  rightGradient.addColorStop(0, withAlpha(shiftColor(mid, -0.1), 0.92));
-  rightGradient.addColorStop(1, withAlpha(shiftColor(mid, -0.35), 0.95));
-  ctx.fillStyle = rightGradient;
-  ctx.fill();
-  ctx.strokeStyle = withAlpha(accent, 0.35);
-  ctx.stroke();
-  ctx.restore();
-  drawWallFixtures("east");
+    drawWallFixtures(entry);
 
-  ctx.save();
-  drawIsoPolygon(ctx, [corners[0], corners[3], topCorners[3], topCorners[0]]);
-  const leftGradient = ctx.createLinearGradient(corners[0].x, corners[0].y, topCorners[3].x, topCorners[3].y);
-  leftGradient.addColorStop(0, withAlpha(shiftColor(mid, 0.15), 0.82));
-  leftGradient.addColorStop(1, withAlpha(shiftColor(mid, -0.1), 0.92));
-  ctx.fillStyle = leftGradient;
-  ctx.fill();
-  ctx.strokeStyle = withAlpha(accent, 0.28);
-  ctx.stroke();
-  ctx.restore();
-  drawWallFixtures("west");
-
-  ctx.save();
-  drawIsoPolygon(ctx, corners);
-  const floorGradient = ctx.createLinearGradient(corners[0].x, corners[0].y, corners[2].x, corners[2].y);
-  floorGradient.addColorStop(0, withAlpha(shiftColor(mid, 0.35), 0.96));
-  floorGradient.addColorStop(1, withAlpha(shiftColor(mid, -0.15), 0.95));
-  ctx.fillStyle = floorGradient;
-  ctx.fill();
-  ctx.strokeStyle = withAlpha(accent, 0.7);
-  ctx.lineWidth = 1.4;
-  ctx.stroke();
-  ctx.restore();
-
-  drawIsoFloorPattern(ctx, corners, theme);
-
-  ctx.save();
-  ctx.beginPath();
-  ctx.moveTo(corners[0].x, corners[0].y);
-  ctx.lineTo(corners[1].x, corners[1].y);
-  ctx.lineTo(corners[2].x, corners[2].y);
-  ctx.lineTo(corners[3].x, corners[3].y);
-  ctx.closePath();
-  ctx.strokeStyle = withAlpha(theme.palette?.base ?? "#1e293b", 0.5);
-  ctx.lineWidth = 1.1;
-  ctx.stroke();
-  ctx.restore();
-
-  drawWallFixtures("north");
-  drawWallFixtures("south");
+    ctx.save();
+    ctx.beginPath();
+    ctx.moveTo(geometry.bottomStart.x, geometry.bottomStart.y);
+    ctx.lineTo(geometry.bottomEnd.x, geometry.bottomEnd.y);
+    ctx.strokeStyle = withAlpha(shiftColor(accent, brightness * 0.35 + 0.12), 0.32);
+    ctx.lineWidth = 0.85;
+    ctx.stroke();
+    ctx.restore();
+  });
 
   ctx.save();
   drawIsoPolygon(ctx, corners);
-  const centerX = (corners[0].x + corners[2].x) / 2;
-  const centerY = (corners[0].y + corners[2].y) / 2;
-  const glow = ctx.createRadialGradient(centerX, centerY, 6, centerX, centerY, Math.max(room.width, room.height) * 20);
-  glow.addColorStop(0, withAlpha(accent, 0.32 + showcaseAnimation.pulse * 0.18));
-  glow.addColorStop(1, "rgba(15, 23, 42, 0)");
-  ctx.fillStyle = glow;
+  const interiorGlow = ctx.createRadialGradient(center.x, center.y, 8, center.x, center.y, Math.max(room.width, room.height) * 22);
+  interiorGlow.addColorStop(0, withAlpha(accent, 0.28 + showcaseAnimation.pulse * 0.16));
+  interiorGlow.addColorStop(1, "rgba(15, 23, 42, 0)");
+  ctx.fillStyle = interiorGlow;
   ctx.fill();
   ctx.restore();
 
@@ -4434,8 +5531,8 @@ const drawIsoRoomShowcase = (ctx, project, room) => {
     ctx.save();
     drawIsoPolygon(ctx, corners);
     ctx.setLineDash([6, 6]);
-    ctx.lineWidth = 2.4 + pulse * 1.4 + showcaseAnimation.wave * 0.8;
-    ctx.strokeStyle = withAlpha(accent, 0.55 + pulse * 0.25 + showcaseAnimation.pulse * 0.15);
+    ctx.lineWidth = 2.2 + pulse * 1.2 + showcaseAnimation.wave * 0.8;
+    ctx.strokeStyle = withAlpha(accent, 0.5 + pulse * 0.25 + showcaseAnimation.pulse * 0.18);
     ctx.stroke();
     ctx.restore();
   }
@@ -4779,52 +5876,53 @@ const drawIsoPatients = (ctx, project) => {
     ctx.save();
     ctx.translate(point.x, point.y);
     drawMoodGlow(ctx, patient.mood ?? patient.status);
+    const palette = getPatientAvatarPalette(patient);
+    const motion = ensureAgentMotion(patient);
+    const pose = derivePoseFromMotion(motion);
+    const strideSpan = Math.abs(pose.frontLeg - pose.backLeg);
     ctx.beginPath();
-    ctx.ellipse(0, 8, 14, 6, 0, 0, Math.PI * 2);
-    ctx.fillStyle = "rgba(15, 23, 42, 0.45)";
+    ctx.ellipse(0, 8, 12 + strideSpan * 2.5, 5.6, 0, 0, Math.PI * 2);
+    ctx.fillStyle = "rgba(8, 15, 32, 0.52)";
     ctx.fill();
-    const bodyGradient = ctx.createLinearGradient(-6, -14, 6, 10);
-    bodyGradient.addColorStop(0, withAlpha(patient.profile.color ?? "#38bdf8", 0.9));
-    bodyGradient.addColorStop(1, withAlpha(shiftColor(patient.profile.color ?? "#38bdf8", -0.25), 0.95));
-    ctx.fillStyle = bodyGradient;
-    ctx.beginPath();
-    ctx.ellipse(0, -4, 8, 10, 0, 0, Math.PI * 2);
-    ctx.fill();
+    ctx.save();
+    ctx.translate(0, -2);
+    ctx.scale(0.92, 0.86);
+    drawHumanFigure(ctx, palette, {
+      scale: 0.9,
+      pose,
+      detail: { type: "patient", emergency: patient.isEmergency },
+    });
+    ctx.restore();
+
     if (patient.isEmergency) {
-      ctx.strokeStyle = "rgba(239, 68, 68, 0.85)";
-      ctx.lineWidth = 1.4;
+      ctx.save();
+      ctx.translate(0, -16);
+      ctx.fillStyle = "rgba(239, 68, 68, 0.18)";
+      ctx.beginPath();
+      ctx.arc(0, 0, 8, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.fillStyle = "rgba(239, 68, 68, 0.92)";
+      ctx.beginPath();
+      ctx.arc(10, -4, 3.4, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.strokeStyle = "rgba(248, 250, 252, 0.95)";
+      ctx.lineWidth = 1;
+      ctx.beginPath();
+      ctx.moveTo(8.6, -4);
+      ctx.lineTo(11.4, -4);
+      ctx.moveTo(10, -5.4);
+      ctx.lineTo(10, -2.6);
       ctx.stroke();
+      ctx.restore();
     }
 
     const markerId = getPatientMarkerId(patient);
     if (markerId) {
+      ctx.save();
+      ctx.translate(0, -12);
       drawPatientSymptomMarker(ctx, markerId);
+      ctx.restore();
     }
-
-    ctx.fillStyle = "rgba(15, 23, 42, 0.92)";
-    ctx.beginPath();
-    ctx.arc(0, -12, 4, 0, Math.PI * 2);
-    ctx.fill();
-    ctx.fillStyle = "rgba(241, 245, 249, 0.98)";
-    ctx.beginPath();
-    ctx.arc(-1.6, -13, 0.95, 0, Math.PI * 2);
-    ctx.arc(1.6, -13, 0.95, 0, Math.PI * 2);
-    ctx.fill();
-    ctx.strokeStyle = patient.isEmergency
-      ? "rgba(248, 113, 113, 0.85)"
-      : "rgba(15, 23, 42, 0.8)";
-    ctx.lineWidth = 0.8;
-    ctx.beginPath();
-    const mood = patient.mood ?? patient.status;
-    if (mood === "relieved" || mood === "hopeful") {
-      ctx.arc(0, -10.4, 2, Math.PI * 0.2, Math.PI * 0.8);
-    } else if (mood === "upset" || mood === "urgent") {
-      ctx.arc(0, -10, 1.9, Math.PI * 1.2, Math.PI * 1.9, true);
-    } else {
-      ctx.moveTo(-1.5, -10.4);
-      ctx.lineTo(1.5, -10.4);
-    }
-    ctx.stroke();
     ctx.restore();
   });
 };
@@ -4835,22 +5933,34 @@ const drawIsoStaff = (ctx, project) => {
     const point = project(agent.position.x, agent.position.y);
     ctx.save();
     ctx.translate(point.x, point.y);
+    const palette = getStaffAvatarPalette(agent);
+    const motion = ensureAgentMotion(agent);
+    const pose = derivePoseFromMotion(motion);
+    const strideSpan = Math.abs(pose.frontLeg - pose.backLeg);
     ctx.beginPath();
-    ctx.ellipse(0, 6, 12, 5, 0, 0, Math.PI * 2);
-    ctx.fillStyle = "rgba(8, 15, 32, 0.55)";
+    ctx.ellipse(0, 6.2, 10.8 + strideSpan * 2.2, 4.8, 0, 0, Math.PI * 2);
+    ctx.fillStyle = "rgba(6, 12, 28, 0.55)";
     ctx.fill();
-    const color = STAFF_ROLE_COLORS[agent.staff?.role] ?? "#94a3b8";
-    const bodyGradient = ctx.createLinearGradient(-5, -12, 5, 12);
-    bodyGradient.addColorStop(0, withAlpha(color, 0.9));
-    bodyGradient.addColorStop(1, withAlpha(shiftColor(color, -0.25), 0.95));
-    ctx.fillStyle = bodyGradient;
-    ctx.beginPath();
-    ctx.ellipse(0, -3, 7, 9, 0, 0, Math.PI * 2);
+    ctx.save();
+    ctx.translate(0, -1.5);
+    ctx.scale(0.9, 0.84);
+    drawHumanFigure(ctx, palette, {
+      scale: 0.92,
+      pose,
+      detail: { type: "staff", role: agent.staff?.role },
+    });
+    ctx.restore();
+    ctx.save();
+    ctx.translate(0, -18);
+    drawRoundedRect(ctx, -4.5, -4.5, 9, 9, 2.5);
+    ctx.fillStyle = "rgba(15, 23, 42, 0.8)";
     ctx.fill();
-    ctx.fillStyle = "rgba(15, 23, 42, 0.92)";
-    ctx.beginPath();
-    ctx.arc(0, -10, 4, 0, Math.PI * 2);
-    ctx.fill();
+    ctx.fillStyle = withAlpha(palette.accent, 0.9);
+    ctx.font = "700 7px 'Segoe UI', sans-serif";
+    ctx.textAlign = "center";
+    ctx.textBaseline = "middle";
+    ctx.fillText((agent.staff?.role ?? "").charAt(0).toUpperCase(), 0, 0);
+    ctx.restore();
     ctx.restore();
   });
 };
@@ -4861,8 +5971,8 @@ const drawIsoAgents = (ctx, project) => {
 };
 
 const renderShowcaseCanvas = (ctx) => {
-  const width = GRID_WIDTH * CANVAS_CELL;
-  const height = GRID_HEIGHT * CANVAS_CELL;
+  const width = getGridWidth() * CANVAS_CELL;
+  const height = getGridHeight() * CANVAS_CELL;
   ctx.clearRect(0, 0, width, height);
 
   const { pulse, wave, time } = showcaseAnimation;
@@ -4914,6 +6024,8 @@ const renderShowcaseCanvas = (ctx) => {
   const ownedParcels = state.properties.filter((parcel) => parcel.owned);
   ownedParcels.forEach((parcel) => drawIsoParcelFloor(ctx, project, parcel));
 
+  state.shells.forEach((shell) => drawIsoCampusShell(ctx, project, shell));
+
   const previewOverlay = buildPreviewState.active
     ? {
         x: buildPreviewState.x,
@@ -4936,9 +6048,11 @@ const renderShowcaseCanvas = (ctx) => {
     drawIsoBuildOverlay(ctx, project, previewOverlay);
   }
 
-  const sortedRooms = [...state.rooms].sort(
-    (a, b) => a.x + a.y + a.height - (b.x + b.y + b.height)
-  );
+  const sortedRooms = [...state.rooms].sort((a, b) => {
+    const centerA = project(a.x + a.width / 2, a.y + a.height / 2, 0);
+    const centerB = project(b.x + b.width / 2, b.y + b.height / 2, 0);
+    return (centerA.depth ?? 0) - (centerB.depth ?? 0);
+  });
   sortedRooms.forEach((room) => drawIsoRoomShowcase(ctx, project, room));
 
   drawIsoAgents(ctx, project);
@@ -5109,14 +6223,14 @@ const findPatientRoamSpot = (patient) => {
   const queueIndexRaw = patient.queueIndex ?? state.queue.indexOf(patient);
   const queueIndex = queueIndexRaw >= 0 ? queueIndexRaw : 0;
   const slot = getQueueSlotPosition(queueIndex);
-  const baseX = clamp(Math.round(slot.x), 0, GRID_WIDTH - 1);
-  const baseY = clamp(Math.round(slot.y), 0, GRID_HEIGHT - 1);
-  const corridorRow = clamp(Math.round(CORRIDOR_Y), 0, GRID_HEIGHT - 1);
+  const baseX = clamp(Math.round(slot.x), 0, getGridWidth() - 1);
+  const baseY = clamp(Math.round(slot.y), 0, getGridHeight() - 1);
+  const corridorRow = clamp(Math.round(getCorridorY()), 0, getGridHeight() - 1);
   const radius = 4 + Math.min(queueIndex, 6);
   const candidates = [];
-  for (let y = Math.max(0, baseY - radius); y <= Math.min(GRID_HEIGHT - 1, baseY + radius); y++) {
+  for (let y = Math.max(0, baseY - radius); y <= Math.min(getGridHeight() - 1, baseY + radius); y++) {
     if (Math.abs(y - corridorRow) > 2) continue;
-    for (let x = Math.max(0, baseX - radius); x <= Math.min(GRID_WIDTH - 1, baseX + radius); x++) {
+    for (let x = Math.max(0, baseX - radius); x <= Math.min(getGridWidth() - 1, baseX + radius); x++) {
       if (!isTileUnlocked(x, y)) continue;
       if (state.grid[y][x]) continue;
       const worldPoint = { x: x + 0.5, y: y + 0.5 };
@@ -5494,7 +6608,7 @@ const updateObjectives = () => {
   });
 };
 
-const describeParcelSize = (parcel) => `${parcel.width}×${parcel.height} tiles`;
+const describeParcelSize = (parcel) => `${parcel.width}×${parcel.height} units`;
 
 const formatParcelExtent = (parcel) => {
   const startColumn = AXIS_LETTERS[parcel.x] ?? parcel.x + 1;
@@ -5525,7 +6639,7 @@ const renderLotOverviewList = () => {
       <p>${parcel.description}</p>
       <dl>
         <div><dt>Footprint</dt><dd>${describeParcelSize(parcel)}</dd></div>
-        <div><dt>Tiles</dt><dd>${formatParcelExtent(parcel)}</dd></div>
+        <div><dt>Span</dt><dd>${formatParcelExtent(parcel)}</dd></div>
       </dl>
     `;
     list.appendChild(item);
@@ -5603,10 +6717,15 @@ const purchaseProperty = (parcelId) => {
   parcel.owned = true;
   state.stats.cash -= parcel.cost;
   state.stats.expensesToday += parcel.cost;
+  const gridExpanded = ensureGridCapacity();
   renderOwnedProperties();
   renderPropertyMarket();
   updateStats();
   updatePropertyPurchaseButtons();
+  if (gridExpanded && elements.grid) {
+    setupGrid();
+  }
+  setupCanvas();
   updateGrid();
   renderHospitalCanvas();
   updateBuildGuidance();
@@ -6117,13 +7236,13 @@ const randomFrom = (array) => array[Math.floor(Math.random() * array.length)];
 
 const distanceBetween = (a, b) => Math.hypot((b?.x ?? 0) - (a?.x ?? 0), (b?.y ?? 0) - (a?.y ?? 0));
 
-const getEntrancePosition = () => ({ x: ENTRANCE_X, y: CORRIDOR_Y });
+const getEntrancePosition = () => ({ x: ENTRANCE_X, y: getCorridorY() });
 
-const getExitPosition = () => ({ x: ENTRANCE_X - 2, y: CORRIDOR_Y });
+const getExitPosition = () => ({ x: ENTRANCE_X - 2, y: getCorridorY() });
 
 const getQueueSlotPosition = (index) => ({
   x: ENTRANCE_X + index * 0.85,
-  y: CORRIDOR_Y,
+  y: getCorridorY(),
 });
 
 const getRoomDoorPosition = (room) => ({
@@ -6142,12 +7261,12 @@ const createPath = (start, end, options = {}) => {
     [options.allowRoomId, ...(Array.isArray(options.allowRoomIds) ? options.allowRoomIds : [])].filter(Boolean)
   );
   const startNode = {
-    x: clamp(Math.floor(start.x), 0, GRID_WIDTH - 1),
-    y: clamp(Math.floor(start.y), 0, GRID_HEIGHT - 1),
+    x: clamp(Math.floor(start.x), 0, getGridWidth() - 1),
+    y: clamp(Math.floor(start.y), 0, getGridHeight() - 1),
   };
   const endNode = {
-    x: clamp(Math.floor(end.x), 0, GRID_WIDTH - 1),
-    y: clamp(Math.floor(end.y), 0, GRID_HEIGHT - 1),
+    x: clamp(Math.floor(end.x), 0, getGridWidth() - 1),
+    y: clamp(Math.floor(end.y), 0, getGridHeight() - 1),
   };
   const startOccupant = state.grid[startNode.y]?.[startNode.x];
   if (startOccupant?.id) {
@@ -6155,7 +7274,7 @@ const createPath = (start, end, options = {}) => {
   }
 
   const walkable = (x, y) => {
-    if (x < 0 || y < 0 || x >= GRID_WIDTH || y >= GRID_HEIGHT) return false;
+    if (x < 0 || y < 0 || x >= getGridWidth() || y >= getGridHeight()) return false;
     if (!isTileUnlocked(x, y)) return false;
     const occupant = state.grid[y][x];
     if (!occupant) return true;
@@ -6238,7 +7357,9 @@ const createPath = (start, end, options = {}) => {
 };
 
 const stepAgent = (agent, speed, deltaSeconds = 1) => {
+  ensureAgentMotion(agent);
   if (!agent.path?.length) {
+    updateAgentMotion(agent, 0, deltaSeconds);
     return true;
   }
   const target = agent.path[0];
@@ -6247,17 +7368,24 @@ const stepAgent = (agent, speed, deltaSeconds = 1) => {
   const distance = Math.hypot(dx, dy);
   if (distance === 0) {
     agent.path.shift();
-    return agent.path.length === 0;
+    return stepAgent(agent, speed, deltaSeconds);
   }
   const distanceThisFrame = Math.max(0, speed * deltaSeconds);
+  const dirX = dx / distance;
+  const dirY = dy / distance;
+  const travel = Math.min(distanceThisFrame, distance);
   if (distance <= distanceThisFrame) {
     agent.position.x = target.x;
     agent.position.y = target.y;
     agent.path.shift();
+  } else {
+    agent.position.x += dirX * distanceThisFrame;
+    agent.position.y += dirY * distanceThisFrame;
+  }
+  updateAgentMotion(agent, travel, deltaSeconds, dirX, dirY);
+  if (distance <= distanceThisFrame) {
     return agent.path.length === 0;
   }
-  agent.position.x += (dx / distance) * distanceThisFrame;
-  agent.position.y += (dy / distance) * distanceThisFrame;
   return false;
 };
 
@@ -6512,6 +7640,7 @@ const createSaveSnapshot = (labelInput) => {
     },
     state: {
       rooms: deepClone(state.rooms),
+      shells: deepClone(state.shells),
       staff: deepClone(state.staff),
       candidates: deepClone(state.candidates),
       queue: deepClone(state.queue),
@@ -6736,6 +7865,7 @@ const applySaveSnapshot = (snapshot) => {
     return false;
   }
 
+  state.properties = deepClone(payload.properties ?? createPropertyState());
   state.rooms = deepClone(payload.rooms ?? []);
   state.rooms.forEach((room) => {
     if (typeof room.builtAt !== "number") {
@@ -6743,6 +7873,10 @@ const applySaveSnapshot = (snapshot) => {
     }
     ensureRoomStructure(room);
   });
+  state.shells = deepClone(payload.shells ?? deriveCampusShells());
+  if (!Array.isArray(state.shells) || !state.shells.length) {
+    state.shells = deriveCampusShells();
+  }
   state.staff = deepClone(payload.staff ?? []);
   state.candidates = deepClone(payload.candidates ?? []);
   state.queue = deepClone(payload.queue ?? []);
@@ -6753,10 +7887,13 @@ const applySaveSnapshot = (snapshot) => {
     if (base) {
       Object.assign(base, patient);
       seedPatientVitals(base);
+      ensureAgentMotion(base);
       return base;
     }
-    queueMap.set(patient.id, seedPatientVitals(patient));
-    return queueMap.get(patient.id);
+    const hydrated = seedPatientVitals(patient);
+    ensureAgentMotion(hydrated);
+    queueMap.set(patient.id, hydrated);
+    return hydrated;
   };
   state.patientsOnSite = (payload.patientsOnSite ?? state.queue).map((patient) => hydratePatient(patient)).filter(Boolean);
   state.activePatients = (payload.activePatients ?? [])
@@ -6769,7 +7906,17 @@ const applySaveSnapshot = (snapshot) => {
   state.billingRecords = deepClone(payload.billingRecords ?? []);
   state.loans = deepClone(payload.loans ?? []);
   state.installmentPlans = deepClone(payload.installmentPlans ?? []);
-  state.properties = deepClone(payload.properties ?? createPropertyState());
+  const gridResized = ensureGridCapacity();
+  const gridWidth = getGridWidth();
+  const gridHeight = getGridHeight();
+  if (!gridResized && state.grid.length === 0) {
+    resizeGrid(gridWidth, gridHeight);
+  }
+  for (let y = 0; y < gridHeight; y += 1) {
+    for (let x = 0; x < gridWidth; x += 1) {
+      state.grid[y][x] = null;
+    }
+  }
   state.litter = payload.litter ?? 0;
   state.ambience = deepClone(payload.ambience ?? state.ambience);
   state.stats = { ...state.stats, ...(payload.stats ?? {}) };
@@ -6815,7 +7962,6 @@ const applySaveSnapshot = (snapshot) => {
   elements.policies.fastTrack.checked = Boolean(payload.policies?.fastTrack);
   elements.policies.overtime.checked = Boolean(payload.policies?.overtime);
 
-  state.grid = Array.from({ length: GRID_HEIGHT }, () => Array(GRID_WIDTH).fill(null));
   state.rooms.forEach((room) => occupyRoomFootprint(room));
 
   if (Array.isArray(state.projects)) {
@@ -6836,6 +7982,13 @@ const applySaveSnapshot = (snapshot) => {
   updateDesignerOptions();
   updateDesignerSummary();
   updateBuildGuidance();
+  if (gridResized && elements.grid) {
+    setupGrid();
+  }
+  if (elements.grid) {
+    updateGrid();
+  }
+  setupCanvas();
   updateUI();
   syncQueuePositions();
 
@@ -7288,7 +8441,7 @@ const placeRoomAt = (x, y, layout, { fromDrag = false } = {}) => {
   if (elements.liveBuild?.footnote) {
     const followUp = fromDrag
       ? "Drag another footprint or press Esc to cancel."
-      : "Click another starting tile or press Esc to cancel.";
+      : "Click another starting spot or press Esc to cancel.";
     elements.liveBuild.footnote.textContent = `${blueprint.name} placed at plot ${coordLabel} covering ${
       footprint.width
     }×${footprint.height}. ${followUp}`;
@@ -7367,47 +8520,12 @@ const establishStartingRoom = ({
 };
 
 const seedBaseHospital = () => {
-  if (state.rooms.length > 0) {
-    return;
+  if (!Array.isArray(state.shells) || !state.shells.length) {
+    state.shells = deriveCampusShells();
   }
-  const starters = [
-    {
-      type: "reception",
-      x: 1,
-      y: 1,
-      width: 3,
-      height: 3,
-      interiorId: "vibrant",
-      decorations: ["calming-plants"],
-    },
-    {
-      type: "gp",
-      x: 5,
-      y: 1,
-      width: 3,
-      height: 3,
-      interiorId: "sterile",
-      machines: ["standard-kit", "advanced-diagnostics"],
-    },
-    {
-      type: "pharmacy",
-      x: 1,
-      y: 4,
-      width: 3,
-      height: 2,
-      interiorId: "modern",
-      decorations: ["hydration-station"],
-    },
-    {
-      type: "triage",
-      x: 5,
-      y: 4,
-      width: 3,
-      height: 2,
-      interiorId: "nature",
-    },
-  ];
-  starters.forEach((config) => establishStartingRoom(config));
+  if (state.rooms.length) {
+    state.rooms.forEach((room) => occupyRoomFootprint(room));
+  }
 };
 
 const handleBuildClick = (x, y) => {
@@ -7545,6 +8663,7 @@ const createPatient = ({ ailment = randomFrom(ailments), emergency = false } = {
     intent: null,
     brainCooldown: 2 + Math.random() * 4,
   };
+  ensureAgentMotion(patient);
   return seedPatientVitals(patient);
 };
 
@@ -7766,6 +8885,9 @@ const updatePatientAgents = (deltaSeconds = 1, { progressSimulation = true } = {
       default:
         break;
     }
+    if (!patient.path?.length) {
+      updateAgentMotion(patient, 0, deltaSeconds);
+    }
     return true;
   });
   maintainSelectedPatient();
@@ -7773,7 +8895,7 @@ const updatePatientAgents = (deltaSeconds = 1, { progressSimulation = true } = {
 
 const getStaffIdleSpot = (index) => ({
   x: ENTRANCE_X - 0.6 + (index % 4) * 0.7,
-  y: CORRIDOR_Y + 0.6 + Math.floor(index / 4) * 0.45,
+  y: getCorridorY() + 0.6 + Math.floor(index / 4) * 0.45,
 });
 
 const syncStaffAgents = () => {
@@ -7791,6 +8913,7 @@ const syncStaffAgents = () => {
     };
     agent.staff = staff;
     agent.homeIndex = index;
+    ensureAgentMotion(agent);
     return agent;
   });
 };
@@ -7817,6 +8940,9 @@ const updateStaffAgents = (deltaSeconds = 1, { progressSimulation = true } = {})
           agent.status = agent.status === "assist-queue" ? "assisting" : "observing";
         }
       }
+    }
+    if (!agent.path?.length) {
+      updateAgentMotion(agent, 0, deltaSeconds);
     }
     if (agent.path?.length) {
       return;
@@ -8383,6 +9509,7 @@ const setupDesignerControls = () => {
 };
 
 const init = () => {
+  ensureGridCapacity();
   seedBaseHospital();
   setupCanvas();
   if (elements.grid) {
@@ -8462,6 +9589,25 @@ const init = () => {
       }
       clearBuildSelection();
     }
+    if (viewMode === "showcase") {
+      const key = event.key.toLowerCase();
+      const step = event.shiftKey ? ROTATION_KEY_STEP * 2 : ROTATION_KEY_STEP;
+      if (key === "arrowleft" || key === "q" || key === "[") {
+        event.preventDefault();
+        adjustShowcaseRotation(-step);
+        return;
+      }
+      if (key === "arrowright" || key === "e" || key === "]") {
+        event.preventDefault();
+        adjustShowcaseRotation(step);
+        return;
+      }
+      if (key === "home") {
+        event.preventDefault();
+        setShowcaseRotation(0, { forceRender: true });
+        return;
+      }
+    }
   });
   if (elements.grid) {
     window.addEventListener("pointermove", handleGridPointerMove);
@@ -8469,6 +9615,13 @@ const init = () => {
   window.addEventListener("pointerup", handleGlobalPointerUp);
   window.addEventListener("pointercancel", handleGlobalPointerCancel);
   window.addEventListener("resize", () => {
+    const resized = ensureGridCapacity();
+    if (resized && elements.grid) {
+      setupGrid();
+    }
+    if (elements.grid) {
+      updateGrid();
+    }
     setupCanvas();
     renderHospitalCanvas();
   });
