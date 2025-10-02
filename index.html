@@ -123,6 +123,35 @@
         <section id="tab-overview" class="tab-panel active" role="tabpanel">
           <h2>Hospital Overview</h2>
           <p>Balance your hospital's prestige, finance, and patient care. Keep staff happy and the wards running smoothly.</p>
+          <section class="mode-selector" aria-label="Play modes">
+            <h3>Choose Play Mode</h3>
+            <div class="mode-buttons" role="group" aria-label="Play mode selection">
+              <button type="button" class="play-mode-button active" data-play-mode="career">Career</button>
+              <button type="button" class="play-mode-button" data-play-mode="free">Free Play</button>
+              <button type="button" class="play-mode-button" data-play-mode="scenario">Scenarios</button>
+            </div>
+            <p id="play-mode-description" class="mode-description">
+              Grow your hospital over time, complete objectives, and expand your campus.
+            </p>
+            <div id="scenario-options" class="scenario-options" hidden>
+              <h4>Scenario Select</h4>
+              <div class="scenario-list">
+                <button type="button" class="scenario-button" data-scenario="stormwatch">
+                  <strong>Stormwatch Surge</strong>
+                  <span>Stabilize emergencies with limited funds.</span>
+                </button>
+                <button type="button" class="scenario-button" data-scenario="wellness">
+                  <strong>Wellness Retreat</strong>
+                  <span>Transform the campus into a calming sanctuary.</span>
+                </button>
+                <button type="button" class="scenario-button" data-scenario="investor">
+                  <strong>Investor Showcase</strong>
+                  <span>Impress investors with bold expansion.</span>
+                </button>
+              </div>
+            </div>
+            <p id="play-mode-summary" class="mode-summary">Build up prestige, unlock parcels, and complete objectives to progress your career.</p>
+          </section>
           <div class="meter">
             <label for="meter-cleanliness">Cleanliness</label>
             <progress id="meter-cleanliness" value="80" max="100"></progress>

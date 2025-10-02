@@ -1012,6 +1012,11 @@ const objectives = [
 ];
 
 const deepClone = (input) => JSON.parse(JSON.stringify(input));
+const cloneObjectives = (items = []) =>
+  items.map((objective) => ({
+    ...objective,
+    completed: false,
+  }));
 
 const clamp = (value, min, max) => Math.max(min, Math.min(max, value));
 
@@ -1099,6 +1104,241 @@ const drawRoundedRect = (ctx, x, y, width, height, radius) => {
 const createPropertyState = () =>
   PROPERTY_PARCELS.map((parcel) => ({ ...parcel, owned: parcel.cost === 0 }));
 
+const PLAY_MODES = {
+  career: {
+    id: "career",
+    label: "Career",
+    description:
+      "Grow your hospital over time, complete objectives, and expand your campus.",
+    summary: "Build up prestige, unlock parcels, and complete objectives to progress your career.",
+    stats: {
+      cash: STARTING_CASH,
+      reputation: 50,
+      cleanliness: 75,
+      efficiency: 60,
+      morale: 70,
+      grounds: 72,
+      plantCare: 78,
+      environmentScore: 55,
+      welfareScore: 55,
+    },
+    objectives,
+    intro: "A new hospital charter has been approved — let's get to work.",
+  },
+  free: {
+    id: "free",
+    label: "Free Play",
+    description: "Experiment freely with generous funding and no mandatory goals.",
+    summary: "Design your dream campus without budget pressure or objectives.",
+    stats: {
+      cash: 350000,
+      reputation: 60,
+      cleanliness: 82,
+      efficiency: 72,
+      morale: 80,
+      grounds: 84,
+      plantCare: 86,
+      environmentScore: 68,
+      welfareScore: 70,
+    },
+    objectives: [],
+    intro: "Sandbox unlocked — design freely and try bold ideas.",
+  },
+  scenario: {
+    id: "scenario",
+    label: "Scenarios",
+    description: "Choose a curated hospital challenge with unique conditions.",
+    summary: "Select a scenario to tackle focused objectives and starting layouts.",
+  },
+};
+
+const SCENARIOS = [
+  {
+    id: "stormwatch",
+    name: "Stormwatch Surge",
+    summary: "Stabilize a surge of emergency patients with limited capital.",
+    description:
+      "Emergency services are rerouting severe trauma cases to your facility. Expand trauma capacity fast and keep morale high despite scarce funds.",
+    intro: "Stormwatch Control has dispatched multiple ambulances — triage will be critical.",
+    stats: {
+      cash: 110000,
+      reputation: 58,
+      cleanliness: 70,
+      efficiency: 58,
+      morale: 68,
+      grounds: 72,
+      plantCare: 74,
+      environmentScore: 52,
+      welfareScore: 54,
+    },
+    ownedParcels: ["atrium", "emergency"],
+    objectives: [
+      {
+        id: "stormwatch-parcel",
+        text: "Own the Emergency Concourse parcel.",
+        condition: (state) =>
+          state.properties.some((parcel) => parcel.id === "emergency" && parcel.owned),
+      },
+      {
+        id: "stormwatch-triage",
+        text: "Build a Triage room to stabilize arrivals.",
+        condition: (state) => state.rooms.some((room) => room.type === "triage"),
+      },
+      {
+        id: "stormwatch-patients",
+        text: "Treat 12 patients during the surge.",
+        condition: (state) => state.stats.patientsTreated >= 12,
+      },
+    ],
+  },
+  {
+    id: "wellness",
+    name: "Wellness Retreat",
+    summary: "Turn the campus into a calming sanctuary for long-term care.",
+    description:
+      "Regional planners want a flagship wellness hospital. Focus on ambience and staff morale to keep guests returning.",
+    intro: "Investors are touring the gardens soon — make every wing feel restorative.",
+    stats: {
+      cash: 140000,
+      reputation: 55,
+      cleanliness: 78,
+      efficiency: 62,
+      morale: 75,
+      grounds: 85,
+      plantCare: 88,
+      environmentScore: 65,
+      welfareScore: 68,
+    },
+    ownedParcels: ["atrium", "gardens"],
+    objectives: [
+      {
+        id: "wellness-environment",
+        text: "Reach an environment score of 80.",
+        condition: (state) => state.stats.environmentScore >= 80,
+      },
+      {
+        id: "wellness-morale",
+        text: "Keep staff morale at 80 or higher.",
+        condition: (state) => state.stats.morale >= 80,
+      },
+      {
+        id: "wellness-ward",
+        text: "Build a Ward to offer restorative stays.",
+        condition: (state) => state.rooms.some((room) => room.type === "ward"),
+      },
+    ],
+  },
+  {
+    id: "investor",
+    name: "Investor Showcase",
+    summary: "Deliver standout results before the investors pull funding.",
+    description:
+      "You have one season to dazzle investors. Start with generous capital but demanding expectations for prestige and throughput.",
+    intro: "A delegation of investors is arriving — make every ledger entry shine.",
+    stats: {
+      cash: 220000,
+      reputation: 62,
+      cleanliness: 76,
+      efficiency: 68,
+      morale: 72,
+      grounds: 74,
+      plantCare: 76,
+      environmentScore: 60,
+      welfareScore: 60,
+    },
+    objectives: [
+      {
+        id: "investor-reputation",
+        text: "Reach reputation 80.",
+        condition: (state) => state.stats.reputation >= 80,
+      },
+      {
+        id: "investor-research",
+        text: "Complete any research project.",
+        condition: (state) => state.projects.some((project) => project.unlocked),
+      },
+      {
+        id: "investor-patients",
+        text: "Treat 20 patients to impress the delegation.",
+        condition: (state) => state.stats.patientsTreated >= 20,
+      },
+    ],
+  },
+];
+
+const createInitialState = ({ playMode = "career", scenarioId = null } = {}) => {
+  const modeConfig = PLAY_MODES[playMode] ?? PLAY_MODES.career;
+  const scenarioConfig =
+    playMode === "scenario"
+      ? SCENARIOS.find((scenario) => scenario.id === scenarioId) ?? null
+      : null;
+  const modeStats = modeConfig.stats ?? {};
+  const stats = {
+    day: 1,
+    tick: 0,
+    cash: modeStats.cash ?? STARTING_CASH,
+    reputation: modeStats.reputation ?? 50,
+    patientsTreated: 0,
+    cleanliness: modeStats.cleanliness ?? 75,
+    efficiency: modeStats.efficiency ?? 60,
+    morale: modeStats.morale ?? 70,
+    grounds: modeStats.grounds ?? 72,
+    plantCare: modeStats.plantCare ?? 78,
+    revenueToday: 0,
+    expensesToday: 0,
+    environmentScore: modeStats.environmentScore ?? 55,
+    welfareScore: modeStats.welfareScore ?? 55,
+  };
+
+  if (scenarioConfig?.stats) {
+    Object.assign(stats, scenarioConfig.stats);
+  }
+
+  const objectivesSource = scenarioConfig
+    ? scenarioConfig.objectives ?? []
+    : modeConfig.objectives ?? objectives;
+
+  const nextState = {
+    playMode: scenarioConfig ? "scenario" : modeConfig.id,
+    activeScenario: scenarioConfig ? scenarioConfig.id : null,
+    grid: Array.from({ length: GRID_HEIGHT }, () => Array(GRID_WIDTH).fill(null)),
+    rooms: [],
+    staff: [],
+    candidates: [],
+    marketingEffects: [],
+    projects: deepClone(researchProjects),
+    campaigns: deepClone(marketingCampaigns),
+    objectives: cloneObjectives(objectivesSource ?? []),
+    queue: [],
+    billingRecords: [],
+    loans: [],
+    installmentPlans: [],
+    activeTreatments: [],
+    properties: createPropertyState(),
+    litter: 0,
+    ambience: { environment: 0, welfare: 0, morale: 0, reputation: 0 },
+    stats,
+  };
+
+  if (scenarioConfig?.ownedParcels?.length) {
+    nextState.properties.forEach((parcel) => {
+      if (scenarioConfig.ownedParcels.includes(parcel.id)) {
+        parcel.owned = true;
+      }
+    });
+  }
+
+  if (modeConfig?.ownedParcels?.length) {
+    nextState.properties.forEach((parcel) => {
+      if (modeConfig.ownedParcels.includes(parcel.id)) {
+        parcel.owned = true;
+      }
+    });
+  }
+
+  return nextState;
+};
+
 const getParcelAt = (x, y) =>
   state.properties.find(
     (parcel) =>
@@ -1116,40 +1356,7 @@ const isTileUnlocked = (x, y) => {
 const getPropertyById = (id) => state.properties.find((parcel) => parcel.id === id);
 const getOwnedProperties = () => state.properties.filter((parcel) => parcel.owned);
 
-const state = {
-  grid: Array.from({ length: GRID_HEIGHT }, () => Array(GRID_WIDTH).fill(null)),
-  rooms: [],
-  staff: [],
-  candidates: [],
-  marketingEffects: [],
-  projects: deepClone(researchProjects),
-  campaigns: deepClone(marketingCampaigns),
-  objectives: deepClone(objectives),
-  queue: [],
-  billingRecords: [],
-  loans: [],
-  installmentPlans: [],
-  activeTreatments: [],
-  properties: createPropertyState(),
-  litter: 0,
-  ambience: { environment: 0, welfare: 0, morale: 0, reputation: 0 },
-  stats: {
-    day: 1,
-    tick: 0,
-    cash: STARTING_CASH,
-    reputation: 50,
-    patientsTreated: 0,
-    cleanliness: 75,
-    efficiency: 60,
-    morale: 70,
-    grounds: 72,
-    plantCare: 78,
-    revenueToday: 0,
-    expensesToday: 0,
-    environmentScore: 55,
-    welfareScore: 55,
-  },
-};
+const state = createInitialState();
 
 const elements = {
   grid: document.querySelector("#grid"),
@@ -1178,6 +1385,11 @@ const elements = {
   dailyReport: document.querySelector("#daily-report"),
   objectives: document.querySelector("#objectives"),
   billingLedger: document.querySelector("#billing-ledger"),
+  playModes: {
+    description: document.querySelector("#play-mode-description"),
+    summary: document.querySelector("#play-mode-summary"),
+    scenarioOptions: document.querySelector("#scenario-options"),
+  },
   finance: {
     loanOffers: document.querySelector("#loan-offers"),
     activeLoans: document.querySelector("#active-loans"),
@@ -1208,6 +1420,8 @@ const elements = {
 const menuOptions = Array.from(document.querySelectorAll(".menu-option[data-tab-target]"));
 const playfieldModeButtons = Array.from(document.querySelectorAll(".playfield-mode-button"));
 const playfieldPanels = Array.from(document.querySelectorAll(".playfield-panel"));
+const playModeButtons = Array.from(document.querySelectorAll(".play-mode-button"));
+const scenarioButtons = Array.from(document.querySelectorAll(".scenario-button"));
 const constructionToggleButton = document.querySelector("#construction-menu-toggle");
 const buildDropdown = document.querySelector("#build-dropdown");
 const buildDropdownToggle = document.querySelector("#build-dropdown-toggle");
@@ -1223,6 +1437,7 @@ let emptyTileSprite = null;
 let lockedTileSprite = null;
 const themedTileCache = new Map();
 let playfieldMode = "mainland";
+let previewPlayMode = null;
 
 const invalidateCanvasCache = () => {
   blueprintBuffer = null;
@@ -1967,6 +2182,12 @@ const roomVisuals = {
       ctx.fillRect(px + 10, py + 10, CANVAS_CELL - 20, CANVAS_CELL - 20);
     },
   },
+};
+
+const clearEventLog = () => {
+  if (elements.eventLog) {
+    elements.eventLog.innerHTML = "";
+  }
 };
 
 const logEvent = (message, tone = "neutral") => {
@@ -3453,6 +3674,16 @@ const updateQueue = () => {
 
 const updateObjectives = () => {
   elements.objectives.innerHTML = "";
+  if (!state.objectives.length) {
+    const empty = document.createElement("li");
+    empty.className = "objective-empty";
+    empty.textContent =
+      state.playMode === "free"
+        ? "Free Play mode removes mandatory objectives."
+        : "No active objectives at this time.";
+    elements.objectives.appendChild(empty);
+    return;
+  }
   state.objectives.forEach((obj) => {
     const li = document.createElement("li");
     li.textContent = obj.text;
@@ -4446,7 +4677,11 @@ const launchCampaign = (campaignId) => {
 
 const evaluateObjectives = () => {
   state.objectives.forEach((objective) => {
-    if (!objective.completed && objective.condition(state)) {
+    if (
+      !objective.completed &&
+      typeof objective.condition === "function" &&
+      objective.condition(state)
+    ) {
       objective.completed = true;
       state.stats.reputation += 4;
       logEvent(`Objective completed: ${objective.text}`, "positive");
@@ -5002,6 +5237,159 @@ const highlightPanel = (selector) => {
   }, 1200);
 };
 
+const getModeConfig = (modeId) => PLAY_MODES[modeId] ?? PLAY_MODES.career;
+const getScenarioConfig = (scenarioId) =>
+  SCENARIOS.find((scenario) => scenario.id === scenarioId) ?? null;
+
+const updatePlayModeUI = () => {
+  if (!elements.playModes) return;
+  const { description, summary, scenarioOptions } = elements.playModes;
+  const highlightedMode =
+    previewPlayMode === "scenario" && state.playMode !== "scenario"
+      ? "scenario"
+      : state.playMode;
+  playModeButtons.forEach((button) => {
+    const isActive = button.dataset.playMode === highlightedMode;
+    button.classList.toggle("active", isActive);
+  });
+
+  const shouldShowScenarios =
+    previewPlayMode === "scenario" || state.playMode === "scenario";
+  if (scenarioOptions) {
+    scenarioOptions.toggleAttribute("hidden", !shouldShowScenarios);
+  }
+
+  let descriptionText = "";
+  let summaryText = "";
+  if (previewPlayMode === "scenario" && state.playMode !== "scenario") {
+    descriptionText = PLAY_MODES.scenario.description;
+    summaryText = PLAY_MODES.scenario.summary;
+  } else if (state.playMode === "scenario") {
+    const scenarioConfig = getScenarioConfig(state.activeScenario);
+    descriptionText = scenarioConfig?.description ?? PLAY_MODES.scenario.description;
+    summaryText = scenarioConfig?.summary ?? PLAY_MODES.scenario.summary;
+  } else {
+    const modeConfig = getModeConfig(state.playMode);
+    descriptionText = modeConfig.description;
+    summaryText = modeConfig.summary;
+  }
+
+  if (description) {
+    description.textContent = descriptionText;
+  }
+  if (summary) {
+    summary.textContent = summaryText;
+  }
+
+  scenarioButtons.forEach((button) => {
+    const isActive =
+      state.playMode === "scenario" && state.activeScenario === button.dataset.scenario;
+    button.classList.toggle("active", isActive);
+  });
+};
+
+const startNewGame = ({ playMode = "career", scenarioId = null } = {}) => {
+  const scenarioConfig =
+    playMode === "scenario" ? getScenarioConfig(scenarioId) : null;
+  if (playMode === "scenario" && !scenarioConfig) {
+    previewPlayMode = "scenario";
+    updatePlayModeUI();
+    logEvent("Select a scenario to begin.", "warning");
+    return;
+  }
+
+  const nextState = createInitialState({
+    playMode,
+    scenarioId: scenarioConfig?.id ?? null,
+  });
+
+  Object.keys(nextState).forEach((key) => {
+    state[key] = nextState[key];
+  });
+
+  previewPlayMode = null;
+  selectedRoom = null;
+  patientIdCounter = 1;
+  roomIdCounter = 1;
+  staffIdCounter = 1;
+
+  designerState.blueprint = null;
+  designerState.sizeId = ROOM_SIZE_LIBRARY[0].id;
+  designerState.interiorId = ROOM_INTERIOR_LIBRARY[0].id;
+  designerState.machines = new Set(["standard-kit"]);
+  designerState.decorations = new Set();
+  designerState.editingRoomId = null;
+  designerState.preview = null;
+
+  invalidateCanvasCache();
+  updateGrid();
+  recalculateAmbience();
+  clearBuildSelection();
+  setPlayfieldMode("mainland");
+  setBuildDropdownOpen(false);
+  clearEventLog();
+  refreshCandidates();
+  renderCandidates();
+  renderRoster();
+  renderProjects();
+  renderCampaigns();
+  renderOwnedProperties();
+  renderPropertyMarket();
+  renderRoomManagement();
+  renderBuildOptions();
+  updateDesignerOptions();
+  updateDesignerSummary();
+  updateObjectives();
+  updateStats();
+  updateQueue();
+  renderBillingLedger();
+  updateDailyReport();
+  updateFinancePanels();
+  updateBuildGuidance();
+  renderHospitalCanvas();
+  const activeTabButton = document.querySelector(".tab-button.active");
+  if (activeTabButton) {
+    updateMenuOptions(activeTabButton.dataset.tab);
+  }
+  const modeConfig = getModeConfig(state.playMode);
+  const message = scenarioConfig
+    ? `Scenario started: ${scenarioConfig.name}`
+    : `${modeConfig.label} mode started.`;
+  logEvent(message, "positive");
+  const introMessage = scenarioConfig?.intro ?? modeConfig.intro;
+  if (introMessage) {
+    logEvent(introMessage, "neutral");
+  }
+  updatePlayModeUI();
+};
+
+const setupPlayModes = () => {
+  if (!playModeButtons.length && !scenarioButtons.length) {
+    return;
+  }
+
+  playModeButtons.forEach((button) => {
+    button.addEventListener("click", () => {
+      const mode = button.dataset.playMode;
+      if (mode === "scenario") {
+        previewPlayMode = "scenario";
+        updatePlayModeUI();
+        return;
+      }
+      startNewGame({ playMode: mode });
+    });
+  });
+
+  scenarioButtons.forEach((button) => {
+    button.addEventListener("click", () => {
+      const scenarioId = button.dataset.scenario;
+      startNewGame({ playMode: "scenario", scenarioId });
+    });
+  });
+
+  updatePlayModeUI();
+};
+
 const updateMenuOptions = (activeTab) => {
   let hasActiveOption = false;
   menuOptions.forEach((option) => {
@@ -5110,6 +5498,7 @@ const init = () => {
   renderPropertyMarket();
   setupTabs();
   setupMenuRail();
+  setupPlayModes();
   setupPlayfieldModes();
   setupBuildDropdown();
   setPlayfieldMode("mainland");
