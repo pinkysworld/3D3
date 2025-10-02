@@ -279,23 +279,26 @@
       <section class="playfield" aria-label="Hospital layout">
         <div class="blueprint-wrapper" aria-label="Construction blueprint">
           <header class="blueprint-header">
-            <h2>Pulse Point Live Hospital</h2>
-            <p>
-              Watch the campus hum in real time as patients and staff flow between rooms. Toggle back to the
-              construction blueprint whenever you need precise tile-by-tile planning.
-            </p>
-            <div class="view-switcher" role="radiogroup" aria-label="Hospital view">
-              <button class="view-switcher__button" type="button" data-view-mode="blueprint" aria-pressed="false">
-                Blueprint
-              </button>
-              <button
-                class="view-switcher__button active"
-                type="button"
-                data-view-mode="showcase"
-                aria-pressed="true"
-              >
-                Live Hospital
-              </button>
+            <div class="blueprint-header__row">
+              <h2>Pulse Point Live Hospital</h2>
+              <div class="blueprint-header__actions">
+                <button class="blueprint-info-button" type="button" id="open-lot-overview">
+                  Lot overview &amp; tips
+                </button>
+                <div class="view-switcher" role="radiogroup" aria-label="Hospital view">
+                  <button class="view-switcher__button" type="button" data-view-mode="blueprint" aria-pressed="false">
+                    Blueprint
+                  </button>
+                  <button
+                    class="view-switcher__button active"
+                    type="button"
+                    data-view-mode="showcase"
+                    aria-pressed="true"
+                  >
+                    Live Hospital
+                  </button>
+                </div>
+              </div>
             </div>
             <div class="blueprint-legend" aria-hidden="true">
               <span><span class="legend-swatch empty"></span> Empty plot</span>
@@ -323,6 +326,11 @@
           height="448"
           aria-label="Hospital rendered floorplan"
         ></canvas>
+        <div class="hospital-zoom-controls" id="hospital-zoom-controls" hidden aria-live="polite">
+          <span id="hospital-zoom-indicator">100%</span>
+          <button type="button" id="reset-hospital-zoom" class="hospital-zoom-reset">Reset view</button>
+        </div>
+        <p class="hospital-view-hint" id="hospital-view-hint">Scroll to zoom • Drag to pan • Double-click to reset</p>
       </section>
 
       <aside class="sidebar secondary" aria-label="Operations">
@@ -395,6 +403,34 @@
         <button type="button" class="save-menu__close" data-close-save id="save-menu-close">Close</button>
       </footer>
     </div>
+  </div>
+
+  <div id="lot-overview-menu" class="info-menu" aria-hidden="true">
+    <div class="info-menu__backdrop" data-close-lot-overview></div>
+    <section
+      class="info-menu__panel"
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="lot-overview-title"
+    >
+      <header class="info-menu__header">
+        <h2 id="lot-overview-title" tabindex="-1">Campus lot overview</h2>
+        <p>
+          Watch the campus hum in real time as patients and staff flow between rooms. Toggle back to the
+          construction blueprint whenever you need precise tile-by-tile planning.
+        </p>
+      </header>
+      <div class="info-menu__body">
+        <p class="info-menu__intro">
+          Use the lot overview to inspect each parcel, understand how it expands the blueprint, and decide where to
+          invest next.
+        </p>
+        <ul id="lot-overview-list" class="lot-overview-list"></ul>
+      </div>
+      <footer class="info-menu__footer">
+        <button type="button" class="info-menu__close" data-close-lot-overview>Close</button>
+      </footer>
+    </section>
   </div>
 </body>
 </html>

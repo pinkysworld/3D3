@@ -968,6 +968,43 @@ progress::-moz-progress-bar {
   gap: 0.75rem;
 }
 
+.blueprint-header__row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+}
+
+.blueprint-header__actions {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.75rem;
+  justify-content: flex-end;
+}
+
+.blueprint-info-button {
+  border: 1px solid rgba(148, 197, 255, 0.35);
+  border-radius: 999px;
+  background: rgba(15, 23, 42, 0.55);
+  color: rgba(191, 219, 254, 0.95);
+  padding: 0.4rem 1rem;
+  font-size: 0.8rem;
+  font-weight: 600;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+  cursor: pointer;
+  transition: background 0.2s ease, transform 0.2s ease, border-color 0.2s ease;
+}
+
+.blueprint-info-button:hover,
+.blueprint-info-button:focus {
+  background: rgba(56, 189, 248, 0.2);
+  border-color: rgba(148, 197, 255, 0.6);
+  transform: translateY(-1px);
+}
+
 .blueprint-header h2 {
   margin: 0 0 0.25rem;
   font-size: 1.25rem;
@@ -1134,6 +1171,7 @@ progress::-moz-progress-bar {
   position: relative;
   overflow: hidden;
   isolation: isolate;
+  transform-origin: center center;
   transition: background 0.4s ease, box-shadow 0.4s ease;
 }
 
@@ -1252,6 +1290,69 @@ progress::-moz-progress-bar {
   border-color: var(--accent);
 }
 
+.hospital-zoom-controls {
+  margin-top: 0.75rem;
+  align-self: flex-end;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.75rem;
+  background: rgba(15, 23, 42, 0.6);
+  border: 1px solid rgba(148, 163, 184, 0.25);
+  border-radius: 999px;
+  padding: 0.35rem 0.75rem;
+  font-size: 0.75rem;
+  color: rgba(191, 219, 254, 0.85);
+  box-shadow: 0 8px 20px rgba(15, 23, 42, 0.35);
+}
+
+.hospital-zoom-controls span {
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.hospital-zoom-reset {
+  border: none;
+  background: rgba(56, 189, 248, 0.18);
+  color: rgba(191, 219, 254, 0.95);
+  border-radius: 999px;
+  padding: 0.25rem 0.7rem;
+  font-size: 0.75rem;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  cursor: pointer;
+  transition: background 0.2s ease, transform 0.2s ease;
+}
+
+.hospital-zoom-reset:hover,
+.hospital-zoom-reset:focus {
+  background: rgba(56, 189, 248, 0.3);
+  transform: translateY(-1px);
+}
+
+#hospital-canvas {
+  touch-action: none;
+}
+
+#hospital-canvas[data-view-mode="showcase"] {
+  cursor: grab;
+  transition: cursor 0.15s ease;
+}
+
+#hospital-canvas[data-view-mode="showcase"].is-panning {
+  cursor: grabbing;
+}
+
+.hospital-view-hint {
+  margin-top: 0.5rem;
+  font-size: 0.7rem;
+  letter-spacing: 0.06em;
+  color: rgba(148, 163, 184, 0.7);
+  text-transform: uppercase;
+  text-align: right;
+}
+
 .save-menu {
   position: fixed;
   inset: 0;
@@ -1298,6 +1399,173 @@ progress::-moz-progress-bar {
   margin: 0.35rem 0 0;
   font-size: 0.9rem;
   color: var(--text-muted);
+}
+
+.info-menu {
+  position: fixed;
+  inset: 0;
+  display: none;
+  align-items: center;
+  justify-content: center;
+  z-index: 110;
+}
+
+.info-menu.open {
+  display: flex;
+}
+
+.info-menu__backdrop {
+  position: absolute;
+  inset: 0;
+  background: rgba(15, 23, 42, 0.72);
+  backdrop-filter: blur(10px);
+}
+
+.info-menu__panel {
+  position: relative;
+  width: min(92vw, 540px);
+  max-height: 90vh;
+  background: linear-gradient(170deg, rgba(15, 23, 42, 0.96), rgba(30, 41, 59, 0.93));
+  border-radius: 1.2rem;
+  padding: 1.5rem;
+  box-shadow:
+    0 24px 56px rgba(8, 47, 73, 0.6),
+    0 0 0 1px rgba(148, 197, 255, 0.25);
+  display: flex;
+  flex-direction: column;
+  gap: 1.25rem;
+  overflow: hidden;
+}
+
+.info-menu__header h2 {
+  margin: 0 0 0.35rem;
+  font-size: 1.35rem;
+  letter-spacing: 0.04em;
+}
+
+.info-menu__header p {
+  margin: 0;
+  font-size: 0.9rem;
+  color: var(--text-muted);
+}
+
+.info-menu__body {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+  overflow-y: auto;
+  padding-right: 0.5rem;
+  max-height: calc(80vh - 200px);
+}
+
+.info-menu__intro {
+  margin: 0;
+  font-size: 0.85rem;
+  color: rgba(203, 213, 225, 0.85);
+  line-height: 1.4;
+}
+
+.lot-overview-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 0.85rem;
+}
+
+.lot-overview-item {
+  background: rgba(15, 23, 42, 0.7);
+  border-radius: 1rem;
+  border: 1px solid rgba(148, 197, 255, 0.25);
+  padding: 0.9rem 1rem;
+  display: grid;
+  gap: 0.65rem;
+  box-shadow: inset 0 0 0 1px rgba(30, 64, 175, 0.15);
+}
+
+.lot-overview-item header {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 0.5rem;
+}
+
+.lot-overview-item h3,
+.lot-overview-item h4 {
+  margin: 0;
+  font-size: 1rem;
+  color: rgba(191, 219, 254, 0.95);
+}
+
+.lot-overview-item p {
+  margin: 0;
+  font-size: 0.85rem;
+  color: rgba(203, 213, 225, 0.85);
+  line-height: 1.45;
+}
+
+.lot-overview-item dl {
+  margin: 0;
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+  gap: 0.5rem 1rem;
+}
+
+.lot-overview-item dt {
+  font-size: 0.7rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: rgba(148, 197, 255, 0.75);
+}
+
+.lot-overview-item dd {
+  margin: 0;
+  font-size: 0.85rem;
+  color: rgba(226, 232, 240, 0.92);
+}
+
+.lot-status-badge {
+  border-radius: 999px;
+  padding: 0.2rem 0.65rem;
+  font-size: 0.7rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  font-weight: 600;
+  background: rgba(56, 189, 248, 0.18);
+  color: rgba(148, 197, 255, 0.92);
+}
+
+.lot-status-badge.owned {
+  background: rgba(34, 197, 94, 0.2);
+  color: rgba(190, 242, 100, 0.9);
+}
+
+.lot-status-badge.locked {
+  background: rgba(251, 191, 36, 0.18);
+  color: rgba(253, 224, 71, 0.85);
+}
+
+.info-menu__footer {
+  display: flex;
+  justify-content: flex-end;
+}
+
+.info-menu__close {
+  border: none;
+  border-radius: 999px;
+  padding: 0.45rem 1.25rem;
+  background: linear-gradient(135deg, rgba(59, 130, 246, 0.9), rgba(14, 165, 233, 0.85));
+  color: #0f172a;
+  font-weight: 600;
+  cursor: pointer;
+  transition: transform 0.2s ease, box-shadow 0.2s ease;
+}
+
+.info-menu__close:hover,
+.info-menu__close:focus {
+  transform: translateY(-1px);
+  box-shadow: 0 10px 20px rgba(14, 165, 233, 0.35);
 }
 
 .save-menu__body {

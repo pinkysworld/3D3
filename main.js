@@ -12,6 +12,9 @@ const ISO_TILE_WIDTH = 64;
 const ISO_TILE_HEIGHT = 36;
 const ISO_WALL_HEIGHT = 28;
 const NEW_ROOM_HIGHLIGHT_TICKS = 36;
+const MIN_SHOWCASE_ZOOM = 0.65;
+const MAX_SHOWCASE_ZOOM = 1.8;
+const SHOWCASE_PAN_PADDING = 0.35;
 const showcaseAnimation = {
   time: 0,
   pulse: 0,
@@ -193,6 +196,45 @@ const ROOM_INTERIOR_LIBRARY = [
       decor: "#f97316",
     },
     modifiers: { welfare: 2, morale: 2 },
+  },
+  {
+    id: "zenith",
+    label: "Zenith Glasshouse",
+    cost: 1850,
+    upkeep: 38,
+    palette: {
+      base: "#0b1120",
+      mid: "#134e4a",
+      accent: "#2dd4bf",
+      decor: "#f59e0b",
+    },
+    modifiers: { environment: 3, reputation: 1, efficiency: 1 },
+  },
+  {
+    id: "heritage",
+    label: "Heritage Copper",
+    cost: 1700,
+    upkeep: 33,
+    palette: {
+      base: "#1c1917",
+      mid: "#b45309",
+      accent: "#f97316",
+      decor: "#fde68a",
+    },
+    modifiers: { morale: 2, reputation: 2 },
+  },
+  {
+    id: "aurora",
+    label: "Aurora Pulse",
+    cost: 1780,
+    upkeep: 37,
+    palette: {
+      base: "#111827",
+      mid: "#312e81",
+      accent: "#a855f7",
+      decor: "#38bdf8",
+    },
+    modifiers: { efficiency: 2, welfare: 1, reputation: 2 },
   },
 ];
 
@@ -1278,6 +1320,17 @@ const elements = {
     market: document.querySelector("#property-market"),
     owned: document.querySelector("#property-owned"),
   },
+  lotOverview: {
+    openButton: document.querySelector("#open-lot-overview"),
+    modal: document.querySelector("#lot-overview-menu"),
+    list: document.querySelector("#lot-overview-list"),
+  },
+  zoom: {
+    container: document.querySelector("#hospital-zoom-controls"),
+    indicator: document.querySelector("#hospital-zoom-indicator"),
+    reset: document.querySelector("#reset-hospital-zoom"),
+  },
+  viewHint: document.querySelector("#hospital-view-hint"),
   statDay: document.querySelector("#stat-day"),
   statCash: document.querySelector("#stat-cash"),
   statReputation: document.querySelector("#stat-reputation"),
@@ -1339,13 +1392,161 @@ let emptyTileSprite = null;
 let lockedTileSprite = null;
 const themedTileCache = new Map();
 let viewMode = "showcase";
+let showcaseZoom = 1;
+let showcasePanX = 0;
+let showcasePanY = 0;
+let isShowcasePanning = false;
+let showcasePanPointerId = null;
+let showcasePanLastPoint = null;
 let lastFocusedBeforeSaveMenu = null;
+let lastFocusedBeforeLotOverview = null;
 
 const invalidateCanvasCache = () => {
   blueprintBuffer = null;
   emptyTileSprite = null;
   lockedTileSprite = null;
   themedTileCache.clear();
+};
+
+const computeWheelZoomFactor = (deltaY) => {
+  if (!deltaY) return 1;
+  const magnitude = clamp(Math.abs(deltaY) / 400, 0.08, 0.45);
+  const step = 1 + magnitude;
+  return deltaY < 0 ? step : 1 / step;
+};
+
+const constrainShowcasePan = () => {
+  const width = GRID_WIDTH * CANVAS_CELL;
+  const height = GRID_HEIGHT * CANVAS_CELL;
+  const horizontalAllowance = Math.max(0, (width - width / showcaseZoom) / 2);
+  const verticalAllowance = Math.max(0, (height - height / showcaseZoom) / 2);
+  const limitX = horizontalAllowance + width * SHOWCASE_PAN_PADDING;
+  const limitY = verticalAllowance + height * SHOWCASE_PAN_PADDING;
+  showcasePanX = clamp(showcasePanX, -limitX, limitX);
+  showcasePanY = clamp(showcasePanY, -limitY, limitY);
+};
+
+const updateShowcaseZoomIndicator = () => {
+  const container = elements.zoom?.container;
+  const indicator = elements.zoom?.indicator;
+  if (!container || !indicator) return;
+  if (viewMode !== "showcase") {
+    container.setAttribute("hidden", "true");
+    elements.viewHint?.setAttribute("hidden", "true");
+    return;
+  }
+  container.removeAttribute("hidden");
+  elements.viewHint?.removeAttribute("hidden");
+  indicator.textContent = `${Math.round(showcaseZoom * 100)}%`;
+};
+
+const setShowcaseZoom = (
+  value,
+  { focusX = null, focusY = null, skipPanAdjustment = false, forceRender = false } = {}
+) => {
+  const previous = showcaseZoom;
+  const clamped = clamp(value, MIN_SHOWCASE_ZOOM, MAX_SHOWCASE_ZOOM);
+  const changed = Math.abs(clamped - showcaseZoom) > 0.001;
+  if (changed && focusX !== null && focusY !== null && !skipPanAdjustment) {
+    const width = GRID_WIDTH * CANVAS_CELL;
+    const height = GRID_HEIGHT * CANVAS_CELL;
+    const centerX = width / 2;
+    const centerY = height / 2;
+    const deltaX = (focusX - centerX) * (1 / clamped - 1 / previous);
+    const deltaY = (focusY - centerY) * (1 / clamped - 1 / previous);
+    showcasePanX += deltaX;
+    showcasePanY += deltaY;
+  }
+  showcaseZoom = clamped;
+  constrainShowcasePan();
+  updateShowcaseZoomIndicator();
+  if (changed || forceRender) {
+    renderHospitalCanvas();
+  }
+};
+
+const adjustShowcaseZoom = (factor, options = {}) => {
+  setShowcaseZoom(showcaseZoom * factor, options);
+};
+
+const handleCanvasWheel = (event) => {
+  if (viewMode !== "showcase") {
+    return;
+  }
+  event.preventDefault();
+  const factor = computeWheelZoomFactor(event.deltaY);
+  if (factor !== 1) {
+    const rect = event.currentTarget.getBoundingClientRect();
+    const focusX = event.clientX - rect.left;
+    const focusY = event.clientY - rect.top;
+    adjustShowcaseZoom(factor, { focusX, focusY });
+  }
+};
+
+const handleCanvasDoubleClick = (event) => {
+  if (viewMode !== "showcase") return;
+  event.preventDefault();
+  resetShowcaseView();
+};
+
+const resetShowcaseView = () => {
+  endShowcasePan();
+  showcasePanX = 0;
+  showcasePanY = 0;
+  setShowcaseZoom(1, { skipPanAdjustment: true, forceRender: true });
+};
+
+const endShowcasePan = () => {
+  isShowcasePanning = false;
+  showcasePanPointerId = null;
+  showcasePanLastPoint = null;
+  elements.hospitalCanvas?.classList.remove("is-panning");
+};
+
+const handleCanvasPointerDown = (event) => {
+  if (viewMode !== "showcase") return;
+  if (event.pointerType === "mouse" && event.button !== 0) {
+    return;
+  }
+  isShowcasePanning = true;
+  showcasePanPointerId = event.pointerId;
+  showcasePanLastPoint = { x: event.clientX, y: event.clientY };
+  elements.hospitalCanvas?.classList.add("is-panning");
+  event.currentTarget.setPointerCapture?.(event.pointerId);
+  event.preventDefault();
+};
+
+const handleCanvasPointerMove = (event) => {
+  if (!isShowcasePanning || event.pointerId !== showcasePanPointerId) {
+    return;
+  }
+  const last = showcasePanLastPoint ?? { x: event.clientX, y: event.clientY };
+  const deltaX = event.clientX - last.x;
+  const deltaY = event.clientY - last.y;
+  if (Math.abs(deltaX) < 0.01 && Math.abs(deltaY) < 0.01) {
+    return;
+  }
+  showcasePanLastPoint = { x: event.clientX, y: event.clientY };
+  showcasePanX += deltaX / showcaseZoom;
+  showcasePanY += deltaY / showcaseZoom;
+  constrainShowcasePan();
+  renderHospitalCanvas();
+};
+
+const handleCanvasPointerUp = (event) => {
+  if (event.pointerId !== showcasePanPointerId) {
+    return;
+  }
+  event.currentTarget.releasePointerCapture?.(event.pointerId);
+  endShowcasePan();
+};
+
+const handleCanvasPointerCancel = (event) => {
+  if (event.pointerId && event.pointerId !== showcasePanPointerId) {
+    return;
+  }
+  event.currentTarget?.releasePointerCapture?.(event.pointerId);
+  endShowcasePan();
 };
 
 const createOffscreenCanvas = (width, height) => {
@@ -3078,7 +3279,18 @@ const setupCanvas = () => {
   hospitalCtx.setTransform(1, 0, 0, 1, 0, 0);
   hospitalCtx.scale(scale, scale);
   canvas.dataset.viewMode = viewMode;
+  if (!canvas.dataset.zoomBound) {
+    canvas.addEventListener("wheel", handleCanvasWheel, { passive: false });
+    canvas.addEventListener("dblclick", handleCanvasDoubleClick);
+    canvas.addEventListener("pointerdown", handleCanvasPointerDown);
+    canvas.addEventListener("pointermove", handleCanvasPointerMove);
+    canvas.addEventListener("pointerup", handleCanvasPointerUp);
+    canvas.addEventListener("pointercancel", handleCanvasPointerCancel);
+    canvas.addEventListener("pointerleave", handleCanvasPointerCancel);
+    canvas.dataset.zoomBound = "true";
+  }
   invalidateCanvasCache();
+  updateShowcaseZoomIndicator();
 };
 
 const drawPatientQueue = (ctx) => {
@@ -3991,12 +4203,280 @@ const drawIsoRoomShowcase = (ctx, project, room) => {
   }
 };
 
+const PATIENT_MARKER_RENDERERS = {
+  legCast: (ctx) => {
+    ctx.save();
+    ctx.translate(4.4, 4.6);
+    ctx.rotate(-0.22);
+    drawRoundedRect(ctx, -3, -4, 6, 12, 3);
+    ctx.fillStyle = "rgba(248, 250, 252, 0.95)";
+    ctx.fill();
+    ctx.strokeStyle = "rgba(148, 163, 184, 0.75)";
+    ctx.lineWidth = 1;
+    ctx.stroke();
+    ctx.restore();
+  },
+  fullCast: (ctx) => {
+    ctx.save();
+    ctx.translate(4.1, 2.5);
+    ctx.rotate(-0.22);
+    drawRoundedRect(ctx, -3, -6, 6, 16, 3);
+    ctx.fillStyle = "rgba(248, 250, 252, 0.96)";
+    ctx.fill();
+    ctx.strokeStyle = "rgba(148, 163, 184, 0.8)";
+    ctx.lineWidth = 1;
+    ctx.stroke();
+    ctx.beginPath();
+    ctx.moveTo(-2.6, -1.4);
+    ctx.lineTo(2.6, 0.6);
+    ctx.stroke();
+    ctx.restore();
+  },
+  legBrace: (ctx) => {
+    ctx.save();
+    ctx.translate(4.2, 4.5);
+    ctx.rotate(-0.18);
+    drawRoundedRect(ctx, -3, -4, 5.4, 10, 2);
+    ctx.fillStyle = "rgba(100, 116, 139, 0.85)";
+    ctx.fill();
+    ctx.strokeStyle = "rgba(30, 41, 59, 0.65)";
+    ctx.lineWidth = 1;
+    ctx.stroke();
+    ctx.beginPath();
+    ctx.moveTo(-3, -1.4);
+    ctx.lineTo(2.2, -2.1);
+    ctx.moveTo(-3, 1.6);
+    ctx.lineTo(2.1, 0.7);
+    ctx.stroke();
+    ctx.restore();
+  },
+  heartMonitor: (ctx) => {
+    ctx.save();
+    ctx.translate(0, -2.4);
+    drawRoundedRect(ctx, -6.4, -2.6, 12.8, 5.4, 2.6);
+    ctx.fillStyle = "rgba(30, 64, 175, 0.78)";
+    ctx.fill();
+    ctx.strokeStyle = "rgba(191, 219, 254, 0.85)";
+    ctx.lineWidth = 1;
+    ctx.stroke();
+    ctx.beginPath();
+    ctx.moveTo(-4.8, 0.2);
+    ctx.lineTo(-2.2, -0.8);
+    ctx.lineTo(-0.2, 1.4);
+    ctx.lineTo(1.6, -0.6);
+    ctx.lineTo(4.6, 0.4);
+    ctx.strokeStyle = "rgba(248, 250, 252, 0.92)";
+    ctx.lineWidth = 1;
+    ctx.lineJoin = "round";
+    ctx.stroke();
+    ctx.restore();
+  },
+  headBand: (ctx) => {
+    ctx.save();
+    ctx.translate(0, -12.6);
+    drawRoundedRect(ctx, -4.4, -1.4, 8.8, 2.8, 1.4);
+    ctx.fillStyle = "rgba(248, 250, 252, 0.92)";
+    ctx.fill();
+    ctx.strokeStyle = "rgba(148, 163, 184, 0.65)";
+    ctx.lineWidth = 1;
+    ctx.stroke();
+    ctx.restore();
+  },
+  burnWrap: (ctx) => {
+    ctx.save();
+    ctx.rotate(-0.05);
+    drawRoundedRect(ctx, -6.2, -1.2, 12.4, 3.2, 1.4);
+    ctx.fillStyle = "rgba(248, 250, 252, 0.78)";
+    ctx.fill();
+    ctx.strokeStyle = "rgba(248, 113, 113, 0.68)";
+    ctx.lineWidth = 1;
+    ctx.stroke();
+    drawRoundedRect(ctx, -5.4, 3.1, 10.8, 3, 1.2);
+    ctx.fill();
+    ctx.stroke();
+    ctx.restore();
+  },
+  armSling: (ctx) => {
+    ctx.save();
+    ctx.translate(-3.8, -0.5);
+    drawRoundedRect(ctx, -3.4, -1.2, 6.8, 5.8, 2.6);
+    ctx.fillStyle = "rgba(226, 232, 240, 0.92)";
+    ctx.fill();
+    ctx.strokeStyle = "rgba(148, 163, 184, 0.7)";
+    ctx.lineWidth = 1;
+    ctx.stroke();
+    ctx.beginPath();
+    ctx.moveTo(0.2, -1.1);
+    ctx.lineTo(4.6, -6.6);
+    ctx.stroke();
+    ctx.restore();
+  },
+  bellyWrap: (ctx) => {
+    ctx.save();
+    ctx.translate(0, 2.2);
+    drawRoundedRect(ctx, -6.8, -1.8, 13.6, 6, 3);
+    ctx.fillStyle = "rgba(254, 215, 170, 0.86)";
+    ctx.fill();
+    ctx.strokeStyle = "rgba(244, 114, 182, 0.5)";
+    ctx.lineWidth = 1;
+    ctx.stroke();
+    ctx.restore();
+  },
+  faceMask: (ctx) => {
+    ctx.save();
+    ctx.translate(0, -10.6);
+    drawRoundedRect(ctx, -4.2, -1.1, 8.4, 4.6, 2.2);
+    ctx.fillStyle = "rgba(148, 197, 255, 0.92)";
+    ctx.fill();
+    ctx.strokeStyle = "rgba(30, 64, 175, 0.6)";
+    ctx.lineWidth = 1;
+    ctx.stroke();
+    ctx.beginPath();
+    ctx.moveTo(-4.2, 0.1);
+    ctx.lineTo(-6.1, -0.6);
+    ctx.moveTo(4.2, 0.1);
+    ctx.lineTo(6.1, -0.6);
+    ctx.stroke();
+    ctx.restore();
+  },
+  eyePatch: (ctx) => {
+    ctx.save();
+    ctx.translate(-1.7, -12.6);
+    drawRoundedRect(ctx, -1.9, -1.5, 3.8, 3, 1.4);
+    ctx.fillStyle = "rgba(30, 41, 59, 0.88)";
+    ctx.fill();
+    ctx.strokeStyle = "rgba(148, 163, 184, 0.6)";
+    ctx.lineWidth = 0.9;
+    ctx.stroke();
+    ctx.restore();
+  },
+  armPort: (ctx) => {
+    ctx.save();
+    ctx.translate(7.6, -2.1);
+    ctx.fillStyle = "rgba(148, 163, 184, 0.9)";
+    ctx.beginPath();
+    ctx.arc(0, 0, 1.7, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.strokeStyle = "rgba(59, 130, 246, 0.7)";
+    ctx.lineWidth = 0.8;
+    ctx.stroke();
+    ctx.restore();
+  },
+  rash: (ctx) => {
+    ctx.save();
+    ctx.fillStyle = "rgba(248, 113, 113, 0.68)";
+    ctx.beginPath();
+    ctx.arc(-3.2, -2.2, 1.2, 0, Math.PI * 2);
+    ctx.arc(2.2, -1.2, 1, 0, Math.PI * 2);
+    ctx.arc(0.4, 2.8, 1.1, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.restore();
+  },
+  plaster: (ctx) => {
+    ctx.save();
+    ctx.translate(-2.2, -2.8);
+    drawRoundedRect(ctx, -2.2, -0.9, 4.4, 1.8, 0.9);
+    ctx.fillStyle = "rgba(253, 230, 138, 0.88)";
+    ctx.fill();
+    ctx.strokeStyle = "rgba(217, 119, 6, 0.55)";
+    ctx.lineWidth = 0.8;
+    ctx.stroke();
+    ctx.restore();
+  },
+};
+
+const PATIENT_AILMENT_MARKERS = {
+  fractured: "legCast",
+  asteroidache: "legCast",
+  gravitygrind: "legCast",
+  voidfracture: "fullCast",
+  sprain: "legBrace",
+  stiff: "legBrace",
+  appendix: "bellyWrap",
+  hypergly: "bellyWrap",
+  warpbelly: "bellyWrap",
+  stomavortex: "bellyWrap",
+  spacecolic: "bellyWrap",
+  lunarcramps: "bellyWrap",
+  cardio: "heartMonitor",
+  cardioblast: "heartMonitor",
+  panic: "headBand",
+  burnout: "headBand",
+  neuroflash: "headBand",
+  synapse: "headBand",
+  brainflare: "headBand",
+  soulstorm: "headBand",
+  emberveil: "burnWrap",
+  flareburst: "burnWrap",
+  moonburn: "burnWrap",
+  emberstorm: "burnWrap",
+  nebularinse: "armPort",
+  plasmabuild: "armPort",
+  superbug: "armPort",
+  toxicwave: "bellyWrap",
+  quantumcells: "faceMask",
+  supernova: "faceMask",
+  cosmiccavity: "faceMask",
+  jawsaw: "faceMask",
+  galaxyglare: "eyePatch",
+  nebulacurtain: "eyePatch",
+  opticblast: "eyePatch",
+  meteormeasles: "rash",
+  solarrash: "rash",
+  toybox: "plaster",
+  voidmilk: "plaster",
+  heartquake: "armSling",
+};
+
+const PATIENT_ROOM_MARKERS = {
+  orthopedics: "legCast",
+  physiotherapy: "legBrace",
+  cardiology: "heartMonitor",
+  neurology: "headBand",
+  burn: "burnWrap",
+  gastro: "bellyWrap",
+  maternity: "bellyWrap",
+  dialysis: "armPort",
+  oncology: "faceMask",
+  surgery: "armSling",
+  dental: "faceMask",
+  ophthalmology: "eyePatch",
+  pediatrics: "plaster",
+  dermatology: "rash",
+  psychiatry: "headBand",
+  icu: "armPort",
+};
+
+const getPatientMarkerId = (patient) => {
+  if (!patient?.ailment) return null;
+  const ailmentId = patient.ailment.id;
+  if (ailmentId && PATIENT_AILMENT_MARKERS[ailmentId]) {
+    return PATIENT_AILMENT_MARKERS[ailmentId];
+  }
+  const roomId = patient.ailment.room;
+  if (roomId && PATIENT_ROOM_MARKERS[roomId]) {
+    return PATIENT_ROOM_MARKERS[roomId];
+  }
+  if (patient.isEmergency) {
+    return patient.ailment.severity >= 4 ? "heartMonitor" : "armSling";
+  }
+  return null;
+};
+
+const drawPatientSymptomMarker = (ctx, markerId) => {
+  const renderer = PATIENT_MARKER_RENDERERS[markerId];
+  if (renderer) {
+    renderer(ctx);
+  }
+};
+
 const drawIsoPatients = (ctx, project) => {
   state.patientsOnSite.forEach((patient) => {
     if (!patient.position) return;
     const point = project(patient.position.x, patient.position.y);
     ctx.save();
     ctx.translate(point.x, point.y);
+    drawMoodGlow(ctx, patient.mood ?? patient.status);
     ctx.beginPath();
     ctx.ellipse(0, 8, 14, 6, 0, 0, Math.PI * 2);
     ctx.fillStyle = "rgba(15, 23, 42, 0.45)";
@@ -4013,14 +4493,36 @@ const drawIsoPatients = (ctx, project) => {
       ctx.lineWidth = 1.4;
       ctx.stroke();
     }
-    ctx.fillStyle = "rgba(15, 23, 42, 0.9)";
+
+    const markerId = getPatientMarkerId(patient);
+    if (markerId) {
+      drawPatientSymptomMarker(ctx, markerId);
+    }
+
+    ctx.fillStyle = "rgba(15, 23, 42, 0.92)";
     ctx.beginPath();
     ctx.arc(0, -12, 4, 0, Math.PI * 2);
     ctx.fill();
-    ctx.fillStyle = "rgba(241, 245, 249, 0.95)";
-    ctx.font = "9px 'Segoe UI', sans-serif";
-    ctx.textAlign = "center";
-    ctx.fillText(patient.name.charAt(0), 0, -4);
+    ctx.fillStyle = "rgba(241, 245, 249, 0.98)";
+    ctx.beginPath();
+    ctx.arc(-1.6, -13, 0.95, 0, Math.PI * 2);
+    ctx.arc(1.6, -13, 0.95, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.strokeStyle = patient.isEmergency
+      ? "rgba(248, 113, 113, 0.85)"
+      : "rgba(15, 23, 42, 0.8)";
+    ctx.lineWidth = 0.8;
+    ctx.beginPath();
+    const mood = patient.mood ?? patient.status;
+    if (mood === "relieved" || mood === "hopeful") {
+      ctx.arc(0, -10.4, 2, Math.PI * 0.2, Math.PI * 0.8);
+    } else if (mood === "upset" || mood === "urgent") {
+      ctx.arc(0, -10, 1.9, Math.PI * 1.2, Math.PI * 1.9, true);
+    } else {
+      ctx.moveTo(-1.5, -10.4);
+      ctx.lineTo(1.5, -10.4);
+    }
+    ctx.stroke();
     ctx.restore();
   });
 };
@@ -4062,18 +4564,26 @@ const renderShowcaseCanvas = (ctx) => {
   ctx.clearRect(0, 0, width, height);
 
   const { pulse, wave, time } = showcaseAnimation;
+
+  ctx.save();
+  const centerX = width / 2;
+  const centerY = height / 2;
+  ctx.translate(centerX, centerY);
+  ctx.scale(showcaseZoom, showcaseZoom);
+  ctx.translate(-centerX + showcasePanX, -centerY + showcasePanY);
+
   const background = ctx.createLinearGradient(0, 0, 0, height);
   background.addColorStop(0, `rgba(6, 25, 48, ${0.82 + pulse * 0.14})`);
   background.addColorStop(0.65, `rgba(9, 32, 58, ${0.9 + wave * 0.06})`);
   background.addColorStop(1, "rgba(8, 18, 34, 0.98)");
   ctx.fillStyle = background;
-  ctx.fillRect(0, 0, width, height);
+  ctx.fillRect(-width, -height, width * 3, height * 3);
 
   const aurora = ctx.createLinearGradient(0, 0, width, height);
   aurora.addColorStop(0, `rgba(56, 189, 248, ${0.1 + wave * 0.12})`);
   aurora.addColorStop(1, "rgba(14, 165, 233, 0)");
   ctx.fillStyle = aurora;
-  ctx.fillRect(0, 0, width, height);
+  ctx.fillRect(-width, -height, width * 3, height * 3);
 
   ctx.save();
   ctx.globalCompositeOperation = "lighter";
@@ -4081,7 +4591,7 @@ const renderShowcaseCanvas = (ctx) => {
   pulseGlow.addColorStop(0, `rgba(59, 130, 246, ${0.05 + pulse * 0.12})`);
   pulseGlow.addColorStop(1, "rgba(15, 23, 42, 0)");
   ctx.fillStyle = pulseGlow;
-  ctx.fillRect(0, height * 0.45, width, height * 0.55);
+  ctx.fillRect(-width, height * 0.45, width * 3, height * 0.75);
   ctx.restore();
 
   if (wave > 0.2) {
@@ -4091,7 +4601,7 @@ const renderShowcaseCanvas = (ctx) => {
     ctx.lineWidth = 1.2;
     const drift = (time * 12) % width;
     ctx.beginPath();
-    ctx.moveTo(-width + drift, height * 0.62);
+    ctx.moveTo(-width * 2 + drift, height * 0.62);
     ctx.lineTo(width * 2 + drift, height * 0.52);
     ctx.stroke();
     ctx.restore();
@@ -4137,6 +4647,8 @@ const renderShowcaseCanvas = (ctx) => {
     ctx.restore();
   });
 
+  ctx.restore();
+
   ctx.save();
   const floorGlow = ctx.createLinearGradient(0, height - 140, 0, height);
   floorGlow.addColorStop(0, "rgba(15, 23, 42, 0)");
@@ -4174,6 +4686,11 @@ const setViewMode = (mode, { persist = true } = {}) => {
     return;
   }
   viewMode = mode;
+  if (viewMode !== "showcase") {
+    endShowcasePan();
+  } else {
+    constrainShowcasePan();
+  }
   if (persist && isStorageAvailable) {
     try {
       storage.setItem(VIEW_MODE_STORAGE_KEY, viewMode);
@@ -4182,6 +4699,7 @@ const setViewMode = (mode, { persist = true } = {}) => {
     }
   }
   updateViewModeButtons();
+  updateShowcaseZoomIndicator();
   renderHospitalCanvas();
 };
 
@@ -4201,6 +4719,13 @@ const setupViewToggle = () => {
       }
     });
   });
+};
+
+const setupZoomControls = () => {
+  if (elements.zoom?.reset) {
+    elements.zoom.reset.addEventListener("click", resetShowcaseView);
+  }
+  updateShowcaseZoomIndicator();
 };
 
 const updateStats = () => {
@@ -4331,6 +4856,42 @@ const updateObjectives = () => {
 
 const describeParcelSize = (parcel) => `${parcel.width}×${parcel.height} tiles`;
 
+const formatParcelExtent = (parcel) => {
+  const startColumn = AXIS_LETTERS[parcel.x] ?? parcel.x + 1;
+  const endColumn = AXIS_LETTERS[parcel.x + parcel.width - 1] ?? parcel.x + parcel.width;
+  const startRow = parcel.y + 1;
+  const endRow = parcel.y + parcel.height;
+  return `${startColumn}${startRow} – ${endColumn}${endRow}`;
+};
+
+const renderLotOverviewList = () => {
+  const list = elements.lotOverview?.list;
+  if (!list) return;
+  list.innerHTML = "";
+  state.properties.forEach((parcel) => {
+    const item = document.createElement("li");
+    item.className = "lot-overview-item";
+    const statusClass = parcel.owned ? "owned" : "locked";
+    const statusLabel = parcel.owned
+      ? parcel.cost > 0
+        ? `Owned • ¤${formatCurrency(parcel.cost)}`
+        : "Owned starter parcel"
+      : `For sale • ¤${formatCurrency(parcel.cost)}`;
+    item.innerHTML = `
+      <header>
+        <h4>${parcel.name}</h4>
+        <span class="lot-status-badge ${statusClass}">${statusLabel}</span>
+      </header>
+      <p>${parcel.description}</p>
+      <dl>
+        <div><dt>Footprint</dt><dd>${describeParcelSize(parcel)}</dd></div>
+        <div><dt>Tiles</dt><dd>${formatParcelExtent(parcel)}</dd></div>
+      </dl>
+    `;
+    list.appendChild(item);
+  });
+};
+
 const renderOwnedProperties = () => {
   if (!elements.property?.owned) return;
   const list = elements.property.owned;
@@ -4340,13 +4901,14 @@ const renderOwnedProperties = () => {
     const empty = document.createElement("li");
     empty.textContent = "No parcels owned.";
     list.appendChild(empty);
-    return;
+  } else {
+    owned.forEach((parcel) => {
+      const item = document.createElement("li");
+      item.innerHTML = `<strong>${parcel.name}</strong><span>${describeParcelSize(parcel)}</span>`;
+      list.appendChild(item);
+    });
   }
-  owned.forEach((parcel) => {
-    const item = document.createElement("li");
-    item.innerHTML = `<strong>${parcel.name}</strong><span>${describeParcelSize(parcel)}</span>`;
-    list.appendChild(item);
-  });
+  renderLotOverviewList();
 };
 
 const renderPropertyMarket = () => {
@@ -4359,25 +4921,26 @@ const renderPropertyMarket = () => {
     done.className = "property-complete";
     done.textContent = "All grounds have been purchased.";
     market.appendChild(done);
-    return;
+  } else {
+    forSale.forEach((parcel) => {
+      const card = document.createElement("article");
+      card.className = "property-card";
+      const heading = document.createElement("header");
+      heading.innerHTML = `<h4>${parcel.name}</h4><span>${describeParcelSize(parcel)}</span>`;
+      const body = document.createElement("p");
+      body.textContent = parcel.description;
+      const cta = document.createElement("button");
+      cta.type = "button";
+      cta.textContent = `Purchase for ¤${formatCurrency(parcel.cost)}`;
+      cta.dataset.parcelId = parcel.id;
+      cta.disabled = state.stats.cash < parcel.cost;
+      cta.addEventListener("click", () => purchaseProperty(parcel.id));
+      card.append(heading, body, cta);
+      market.appendChild(card);
+    });
   }
-  forSale.forEach((parcel) => {
-    const card = document.createElement("article");
-    card.className = "property-card";
-    const heading = document.createElement("header");
-    heading.innerHTML = `<h4>${parcel.name}</h4><span>${describeParcelSize(parcel)}</span>`;
-    const body = document.createElement("p");
-    body.textContent = parcel.description;
-    const cta = document.createElement("button");
-    cta.type = "button";
-    cta.textContent = `Purchase for ¤${formatCurrency(parcel.cost)}`;
-    cta.dataset.parcelId = parcel.id;
-    cta.disabled = state.stats.cash < parcel.cost;
-    cta.addEventListener("click", () => purchaseProperty(parcel.id));
-    card.append(heading, body, cta);
-    market.appendChild(card);
-  });
   updatePropertyPurchaseButtons();
+  renderLotOverviewList();
 };
 
 const updatePropertyPurchaseButtons = () => {
@@ -4886,6 +5449,51 @@ const readSaveSlot = (slot) => {
     console.warn(`Failed to read save slot ${slot}`, error);
     return null;
   }
+};
+
+const isLotOverviewOpen = () => Boolean(elements.lotOverview?.modal?.classList.contains("open"));
+
+const openLotOverviewMenu = () => {
+  if (!elements.lotOverview?.modal) return;
+  if (isLotOverviewOpen()) {
+    renderLotOverviewList();
+    return;
+  }
+  renderLotOverviewList();
+  elements.lotOverview.modal.classList.add("open");
+  elements.lotOverview.modal.setAttribute("aria-hidden", "false");
+  document.body.classList.add("modal-open");
+  lastFocusedBeforeLotOverview =
+    document.activeElement instanceof HTMLElement ? document.activeElement : null;
+  const focusTarget =
+    elements.lotOverview.modal.querySelector("#lot-overview-title") ??
+    elements.lotOverview.modal.querySelector("[data-close-lot-overview]");
+  focusTarget?.focus();
+};
+
+const closeLotOverviewMenu = () => {
+  if (!elements.lotOverview?.modal) return;
+  if (!isLotOverviewOpen()) return;
+  elements.lotOverview.modal.classList.remove("open");
+  elements.lotOverview.modal.setAttribute("aria-hidden", "true");
+  if (!isSaveMenuOpen()) {
+    document.body.classList.remove("modal-open");
+  }
+  const focusTarget =
+    lastFocusedBeforeLotOverview && typeof lastFocusedBeforeLotOverview.focus === "function"
+      ? lastFocusedBeforeLotOverview
+      : elements.lotOverview?.openButton;
+  focusTarget?.focus();
+  lastFocusedBeforeLotOverview = null;
+};
+
+const setupLotOverviewMenu = () => {
+  if (elements.lotOverview?.openButton) {
+    elements.lotOverview.openButton.addEventListener("click", () => openLotOverviewMenu());
+  }
+  elements.lotOverview?.modal
+    ?.querySelectorAll("[data-close-lot-overview]")
+    .forEach((button) => button.addEventListener("click", () => closeLotOverviewMenu()));
 };
 
 const isSaveMenuOpen = () => Boolean(elements.save?.modal?.classList.contains("open"));
@@ -6354,7 +6962,9 @@ const init = () => {
   setupGrid();
   updateGrid();
   setupViewToggle();
+  setupZoomControls();
   setupSaveMenu();
+  setupLotOverviewMenu();
   setupDesignerControls();
   updateDesignerOptions();
   updateDesignerSummary();
@@ -6387,6 +6997,11 @@ const init = () => {
       return;
     }
     if (event.key === "Escape") {
+      if (isLotOverviewOpen()) {
+        event.preventDefault();
+        closeLotOverviewMenu();
+        return;
+      }
       if (isSaveMenuOpen()) {
         event.preventDefault();
         closeSaveMenu();
