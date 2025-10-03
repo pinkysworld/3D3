@@ -12,7 +12,7 @@
       <h1>Pulse Point Hospital</h1>
       <div class="stats">
         <div>Day <span id="stat-day">1</span></div>
-        <div>Cash ¤<span id="stat-cash">150,000</span></div>
+        <div>Cash <span id="stat-cash">US$150,000</span></div>
         <div>Reputation <span id="stat-reputation">50</span></div>
         <div>Patients Treated <span id="stat-treated">0</span></div>
         <div>Environment <span id="stat-environment">55</span></div>
@@ -30,6 +30,7 @@
             <button class="tab-button" data-tab="staff" role="tab">Staff</button>
             <button class="tab-button" data-tab="research" role="tab">Research</button>
             <button class="tab-button" data-tab="marketing" role="tab">Marketing</button>
+            <button class="tab-button" data-tab="departments" role="tab">Departments</button>
           </nav>
         </div>
         <div class="menu-block">
@@ -106,6 +107,65 @@
               data-panel="#tab-marketing"
             >
               Marketing Campaigns
+            </button>
+          </div>
+        </div>
+        <div class="menu-block">
+          <h2 class="menu-heading">Departments</h2>
+          <div class="menu-options" role="list">
+            <button
+              class="menu-option"
+              role="listitem"
+              data-tab-target="departments"
+              data-panel="#department-detail"
+              data-department-target="marketing"
+            >
+              Marketing Department
+            </button>
+            <button
+              class="menu-option"
+              role="listitem"
+              data-tab-target="departments"
+              data-panel="#department-detail"
+              data-department-target="debt"
+            >
+              Debt &amp; Receivables
+            </button>
+            <button
+              class="menu-option"
+              role="listitem"
+              data-tab-target="departments"
+              data-panel="#department-detail"
+              data-department-target="emergency"
+            >
+              Emergency Medicine
+            </button>
+            <button
+              class="menu-option"
+              role="listitem"
+              data-tab-target="departments"
+              data-panel="#department-detail"
+              data-department-target="radiology"
+            >
+              Radiology &amp; Diagnostics
+            </button>
+            <button
+              class="menu-option"
+              role="listitem"
+              data-tab-target="departments"
+              data-panel="#department-detail"
+              data-department-target="surgery"
+            >
+              Surgical Services
+            </button>
+            <button
+              class="menu-option"
+              role="listitem"
+              data-tab-target="departments"
+              data-panel="#department-detail"
+              data-department-target="wellness"
+            >
+              Family &amp; Wellness
             </button>
           </div>
         </div>
@@ -263,6 +323,37 @@
             <ul id="built-rooms" class="built-room-list"></ul>
           </section>
           <div class="build-hint" id="build-hint">Select a room blueprint, then drag directly on the hospital floor to place it.</div>
+        </section>
+
+        <section id="tab-departments" class="tab-panel" role="tabpanel">
+          <h2>Department Controls</h2>
+          <p>
+            Direct budgets and staffing priorities for each hospital department. Adjust focus
+            spending to react to patient demand while keeping costs realistic.
+          </p>
+          <div id="panel-departments" class="department-panel" aria-live="polite">
+            <div class="department-legend">
+              <p>
+                Use the focus slider to set funding level. Standby pauses a department, while Surge
+                delivers maximum coverage at a higher daily cost. Toggle a department off to reroute
+                resources temporarily.
+              </p>
+            </div>
+            <div class="department-layout">
+              <nav
+                id="department-menu"
+                class="department-menu"
+                aria-label="Department controls"
+                role="tablist"
+              ></nav>
+              <div
+                id="department-detail"
+                class="department-detail"
+                role="tabpanel"
+                aria-live="polite"
+              ></div>
+            </div>
+          </div>
         </section>
 
         <section id="tab-staff" class="tab-panel" role="tabpanel">
@@ -448,7 +539,7 @@
       <h4 class="name"></h4>
       <p class="role"></p>
       <p class="traits"></p>
-      <button class="hire-button">Hire - ¤<span class="cost"></span></button>
+      <button class="hire-button">Hire - <span class="cost"></span></button>
     </div>
   </template>
 
@@ -458,7 +549,7 @@
       <p class="desc"></p>
       <div class="progress-row">
         <progress max="100" value="0"></progress>
-        <button class="invest-button">Invest ¤<span class="cost"></span></button>
+        <button class="invest-button">Invest <span class="cost"></span></button>
       </div>
     </div>
   </template>
@@ -467,7 +558,7 @@
     <div class="card">
       <h4 class="name"></h4>
       <p class="desc"></p>
-      <button class="launch-button">Launch ¤<span class="cost"></span></button>
+      <button class="launch-button">Launch <span class="cost"></span></button>
     </div>
   </template>
 

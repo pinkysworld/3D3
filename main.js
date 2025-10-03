@@ -4,6 +4,7 @@ import {
   CAMPUS_PADDING_UNITS_X,
   CAMPUS_PADDING_UNITS_Y,
   STARTING_CASH,
+  CURRENCY_SYMBOL,
   DAY_TICKS,
   CANVAS_CELL,
   AXIS_LETTERS,
@@ -50,6 +51,10 @@ import {
   restoreObjectives,
 } from "./js/data/gameData.js";
 import {
+  departmentCatalog,
+  departmentBudgetLevels,
+} from "./js/data/departmentData.js";
+import {
   deepClone,
   clamp,
   hashString,
@@ -78,6 +83,8 @@ const LIGHT_DIRECTION = {
 };
 const ROTATION_SENSITIVITY = 0.0042;
 const ROTATION_KEY_STEP = Math.PI / 18;
+
+const DEPARTMENT_BUDGET_LEVEL_IDS = departmentBudgetLevels.map((level) => level.id);
 
 const storage = (() => {
   try {
@@ -117,6 +124,14 @@ const formatDateTime = (timestamp) => {
 const createPropertyState = () =>
   PROPERTY_PARCELS.map((parcel) => ({ ...parcel, owned: parcel.cost === 0 }));
 
+const createDepartmentState = () =>
+  departmentCatalog.map((department) => ({
+    id: department.id,
+    budgetLevel:
+      typeof department.defaultBudget === "number" ? department.defaultBudget : 1,
+    active: department.defaultActive !== false,
+  }));
+
 const getParcelAt = (x, y) =>
   state.properties.find(
     (parcel) =>
@@ -133,6 +148,37 @@ const isTileUnlocked = (x, y) => {
 
 const getPropertyById = (id) => state.properties.find((parcel) => parcel.id === id);
 const getOwnedProperties = () => state.properties.filter((parcel) => parcel.owned);
+
+const getDepartmentDefinition = (id) =>
+  departmentCatalog.find((department) => department.id === id);
+
+const getDepartmentState = (id) =>
+  state.departments.find((department) => department.id === id);
+
+const getBudgetLevelDefinition = (level) =>
+  departmentBudgetLevels.find((entry) => entry.id === level) ?? departmentBudgetLevels[0];
+
+const markDepartmentsDirty = () => {
+  departmentsDirty = true;
+};
+
+const setDepartmentActive = (id, active) => {
+  const entry = getDepartmentState(id);
+  if (!entry) return;
+  entry.active = Boolean(active);
+  markDepartmentsDirty();
+};
+
+const setDepartmentBudgetLevel = (id, level) => {
+  const entry = getDepartmentState(id);
+  if (!entry) return;
+  const clamped = Math.max(
+    0,
+    Math.min(level, departmentBudgetLevels[departmentBudgetLevels.length - 1]?.id ?? level)
+  );
+  entry.budgetLevel = clamped;
+  markDepartmentsDirty();
+};
 
 const createShellForParcel = (parcel) => {
   if (!parcel) return null;
@@ -199,6 +245,7 @@ const state = {
   loans: [],
   installmentPlans: [],
   properties: createPropertyState(),
+  departments: createDepartmentState(),
   shells: [],
   litter: 0,
   ambience: { environment: 0, welfare: 0, morale: 0, reputation: 0 },
@@ -359,6 +406,11 @@ const elements = {
     activeLoans: document.querySelector("#active-loans"),
     receivables: document.querySelector("#receivables-summary"),
   },
+  departments: {
+    menu: document.querySelector("#department-menu"),
+    detail: document.querySelector("#department-detail"),
+    panel: document.querySelector("#panel-departments"),
+  },
   meters: {
     cleanliness: document.querySelector("#meter-cleanliness"),
     efficiency: document.querySelector("#meter-efficiency"),
@@ -449,6 +501,8 @@ let backgroundMusicSource = null;
 let backgroundMusicBuffer = null;
 let hasBoundGlobalUiSfx = false;
 let audioUnlockBound = false;
+let departmentsDirty = true;
+let selectedDepartmentId = departmentCatalog[0]?.id ?? null;
 
 const invalidateCanvasCache = () => {
   blueprintBuffer = null;
@@ -2108,7 +2162,17 @@ const logEvent = (message, tone = "neutral") => {
   }
 };
 
-const formatCurrency = (value) => value.toLocaleString(undefined, { maximumFractionDigits: 0 });
+const formatCurrency = (value, { withSymbol = false } = {}) => {
+  const numeric = Math.abs(Number.isFinite(value) ? value : 0);
+  const formatted = numeric.toLocaleString("en-US", { maximumFractionDigits: 0 });
+  if (!withSymbol) {
+    return formatted;
+  }
+  const sign = value < 0 ? "-" : "";
+  return `${sign}${CURRENCY_SYMBOL}${formatted}`;
+};
+
+const formatMoney = (value) => formatCurrency(value, { withSymbol: true });
 
 const calculateLoanSchedule = (offer) => {
   const principal = offer.amount;
@@ -2152,7 +2216,7 @@ const takeLoan = (offerId) => {
   };
   state.loans.push(loan);
   state.stats.cash += offer.amount;
-  logEvent(`Secured ${offer.name} for ¤${formatCurrency(offer.amount)}.`, "positive");
+  logEvent(`Secured ${offer.name} for ${formatMoney(offer.amount)}.`, "positive");
   recordLedgerEvent({
     name: "Loan Draw",
     detail: offer.name,
@@ -2175,9 +2239,9 @@ const renderLoanOffers = () => {
     desc.textContent = offer.desc;
     const schedule = calculateLoanSchedule(offer);
     const terms = document.createElement("p");
-    terms.innerHTML = `<strong>Amount:</strong> ¤${formatCurrency(offer.amount)} • <strong>Term:</strong> ${offer.term} days`;
+    terms.innerHTML = `<strong>Amount:</strong> ${formatMoney(offer.amount)} • <strong>Term:</strong> ${offer.term} days`;
     const payment = document.createElement("p");
-    payment.innerHTML = `<strong>Daily:</strong> ¤${formatCurrency(schedule.dailyPayment)} • <strong>Interest:</strong> ${(offer.interestRate * 100).toFixed(1)}%`;
+    payment.innerHTML = `<strong>Daily:</strong> ${formatMoney(schedule.dailyPayment)} • <strong>Interest:</strong> ${(offer.interestRate * 100).toFixed(1)}%`;
     const button = document.createElement("button");
     button.type = "button";
     button.textContent = "Take Loan";
@@ -2203,9 +2267,9 @@ const renderActiveLoans = () => {
   state.loans.forEach((loan) => {
     const li = document.createElement("li");
     const balance = document.createElement("span");
-    balance.innerHTML = `<span>Balance</span><span>¤${formatCurrency(Math.max(0, Math.round(loan.remainingBalance)))}</span>`;
+    balance.innerHTML = `<span>Balance</span><span>${formatMoney(Math.max(0, Math.round(loan.remainingBalance)))}</span>`;
     const payment = document.createElement("span");
-    payment.innerHTML = `<span>Daily</span><span>¤${formatCurrency(loan.dailyPayment)}</span>`;
+    payment.innerHTML = `<span>Daily</span><span>${formatMoney(loan.dailyPayment)}</span>`;
     const days = document.createElement("span");
     days.innerHTML = `<span>Days left</span><span>${Math.max(0, loan.daysRemaining)}</span>`;
     li.innerHTML = `<div><strong>${loan.name}</strong></div>`;
@@ -2219,7 +2283,7 @@ const renderReceivablesSummary = () => {
   const totalDeferred = state.installmentPlans.reduce((sum, plan) => sum + plan.remaining, 0);
   const activePlans = state.installmentPlans.length;
   elements.finance.receivables.innerHTML = `
-    <div><strong>Outstanding:</strong> ¤${formatCurrency(Math.round(totalDeferred))}</div>
+    <div><strong>Outstanding:</strong> ${formatMoney(Math.round(totalDeferred))}</div>
     <div><strong>Active Plans:</strong> ${activePlans}</div>
   `;
 };
@@ -2248,7 +2312,7 @@ const processLoans = () => {
     state.stats.expensesToday += payment;
     recordLedgerEvent({
       name: "Loan Payment",
-      detail: `${loan.name}${interest ? ` (¤${formatCurrency(interest)} interest)` : ""}`,
+      detail: `${loan.name}${interest ? ` (${formatMoney(interest)} interest)` : ""}`,
       amount: -payment,
       tag: "Loan",
     });
@@ -2274,7 +2338,7 @@ const addInstallmentPlan = (plan) => {
   };
   state.installmentPlans.push(entry);
   logEvent(
-    `${plan.patientName} set up installments for ¤${formatCurrency(plan.remaining)}.`,
+    `${plan.patientName} set up installments for ${formatMoney(plan.remaining)}.`,
     "neutral"
   );
   recordLedgerEvent({
@@ -2284,6 +2348,7 @@ const addInstallmentPlan = (plan) => {
     tag: "Receivable",
   });
   updateFinancePanels();
+  markDepartmentsDirty();
 };
 
 const processInstallments = () => {
@@ -2311,6 +2376,7 @@ const processInstallments = () => {
   });
   state.installmentPlans = remainingPlans;
   updateFinancePanels();
+  markDepartmentsDirty();
 };
 
 const getBlueprint = (roomType) => roomCatalog.find((room) => room.id === roomType);
@@ -2400,7 +2466,7 @@ const applyInteriorThemeToRoom = (room, themeId) => {
   const costDelta = nextPreview.totalCost - currentPreview.totalCost;
   if (costDelta > 0 && state.stats.cash < costDelta) {
     logEvent(
-      `Applying ${nextPreview.interior.label} requires ¤${formatCurrency(costDelta)} more funds.`,
+      `Applying ${nextPreview.interior.label} requires ${formatMoney(costDelta)} more funds.`,
       "negative"
     );
     return false;
@@ -2486,9 +2552,9 @@ const updateDesignerSummary = () => {
   const layoutLine = document.createElement("div");
   layoutLine.innerHTML = `<strong>Layout:</strong> ${preview.sizeOption.label} • Theme ${preview.interior.label}`;
   const costLine = document.createElement("div");
-  costLine.innerHTML = `<strong>Total Build Cost:</strong> ¤${formatCurrency(preview.totalCost)}`;
+  costLine.innerHTML = `<strong>Total Build Cost:</strong> ${formatMoney(preview.totalCost)}`;
   const upkeepLine = document.createElement("div");
-  upkeepLine.innerHTML = `<strong>Daily Upkeep:</strong> ¤${formatCurrency(preview.upkeep)}`;
+  upkeepLine.innerHTML = `<strong>Daily Upkeep:</strong> ${formatMoney(preview.upkeep)}`;
   const machineLine = document.createElement("div");
   const machineNames = preview.machines.map((machine) => machine.label).join(", ");
   machineLine.innerHTML = `<strong>Equipment:</strong> ${machineNames || "Baseline kit"}`;
@@ -2540,7 +2606,7 @@ const updateDesignerSummary = () => {
       const delta = preview.totalCost - baselineCost;
       const deltaLine = document.createElement("div");
       if (delta > 0) {
-        deltaLine.innerHTML = `<strong>Upgrade Cost:</strong> ¤${formatCurrency(delta)}`;
+        deltaLine.innerHTML = `<strong>Upgrade Cost:</strong> ${formatMoney(delta)}`;
       } else if (delta < 0) {
         deltaLine.innerHTML = `<strong>Upgrade Cost:</strong> none (layout savings reinvested)`;
       } else {
@@ -2587,14 +2653,18 @@ const updateDesignerOptions = () => {
     const option = document.createElement("option");
     const sizeOption = getSizeOption(id);
     option.value = id;
-    option.textContent = `${sizeOption.label} (¤${formatCurrency(Math.round(blueprint.cost * sizeOption.costMultiplier))})`;
+    option.textContent = `${sizeOption.label} (${formatMoney(
+      Math.round(blueprint.cost * sizeOption.costMultiplier)
+    )})`;
     size.appendChild(option);
   });
   if (typeof designerState.sizeId === "string" && designerState.sizeId.startsWith("custom-")) {
     const customOption = document.createElement("option");
     const layout = getSizeOption(designerState.sizeId);
     customOption.value = designerState.sizeId;
-    customOption.textContent = `${layout.label} (¤${formatCurrency(Math.round(blueprint.cost * layout.costMultiplier))})`;
+    customOption.textContent = `${layout.label} (${formatMoney(
+      Math.round(blueprint.cost * layout.costMultiplier)
+    )})`;
     size.appendChild(customOption);
   }
   size.value = designerState.sizeId;
@@ -2609,7 +2679,7 @@ const updateDesignerOptions = () => {
     const option = document.createElement("option");
     const interior = getInteriorTheme(id);
     option.value = id;
-    option.textContent = `${interior.label} (¤${formatCurrency(interior.cost)})`;
+    option.textContent = `${interior.label} (${formatMoney(interior.cost)})`;
     theme.appendChild(option);
   });
   theme.value = designerState.interiorId;
@@ -2671,10 +2741,10 @@ const updateDesignerOptions = () => {
     const meta = document.createElement("div");
     meta.className = "designer-equipment-option__meta";
     const costMeta = document.createElement("span");
-    costMeta.textContent = `¤${formatCurrency(def.cost)}`;
+    costMeta.textContent = formatMoney(def.cost);
     meta.appendChild(costMeta);
     const upkeepMeta = document.createElement("span");
-    upkeepMeta.textContent = `Upkeep ¤${formatCurrency(def.upkeep)}/day`;
+    upkeepMeta.textContent = `Upkeep ${formatMoney(def.upkeep)}/day`;
     meta.appendChild(upkeepMeta);
     if (id === "standard-kit") {
       const badge = document.createElement("span");
@@ -2774,7 +2844,7 @@ const updateDesignerOptions = () => {
     if (def.isPlant) {
       details.push("Plant");
     }
-    text.textContent = `${def.label} – ¤${formatCurrency(def.cost)}${
+    text.textContent = `${def.label} – ${formatMoney(def.cost)}${
       details.length ? ` (${details.join(", ")})` : ""
     }`;
     label.append(checkbox, text);
@@ -2944,9 +3014,9 @@ const renderRoomManagement = () => {
     const themeSpan = document.createElement("span");
     themeSpan.textContent = theme.label;
     const costSpan = document.createElement("span");
-    costSpan.textContent = `Cost ¤${formatCurrency(room.costInvested ?? blueprint?.cost ?? 0)}`;
+    costSpan.textContent = `Cost ${formatMoney(room.costInvested ?? blueprint?.cost ?? 0)}`;
     const upkeepSpan = document.createElement("span");
-    upkeepSpan.textContent = `Upkeep ¤${formatCurrency(room.upkeep ?? blueprint?.upkeep ?? 0)}`;
+    upkeepSpan.textContent = `Upkeep ${formatMoney(room.upkeep ?? blueprint?.upkeep ?? 0)}`;
     const machinesSpan = document.createElement("span");
     machinesSpan.textContent = `Equipment ${room.machines?.length ?? 0}`;
     const decorSpan = document.createElement("span");
@@ -3043,7 +3113,7 @@ const applyDesignToRoom = () => {
   const delta = preview.totalCost - previousCost;
   if (delta > 0 && state.stats.cash < delta) {
     logEvent(
-      `Upgrading ${blueprint.name} requires ¤${formatCurrency(delta)} more funds.`,
+      `Upgrading ${blueprint.name} requires ${formatMoney(delta)} more funds.`,
       "negative"
     );
     return;
@@ -3080,7 +3150,7 @@ const applyDesignToRoom = () => {
   if (delta > 0) {
     state.stats.cash -= delta;
     state.stats.expensesToday += delta;
-    logEvent(`${blueprint.name} upgraded for ¤${formatCurrency(delta)}.`, "positive");
+    logEvent(`${blueprint.name} upgraded for ${formatMoney(delta)}.`, "positive");
   } else if (delta < 0) {
     logEvent(`${blueprint.name} redesign applied with no extra spend.`, "positive");
   } else {
@@ -5354,7 +5424,7 @@ const drawIsoLockedParcel = (ctx, project, parcel) => {
   ctx.shadowBlur = 8;
   ctx.fillText("For Sale", labelPoint.x, labelPoint.y - 6);
   ctx.font = "600 12px 'Segoe UI', sans-serif";
-  ctx.fillText(`¤${formatCurrency(parcel.cost)}`, labelPoint.x, labelPoint.y + 12);
+  ctx.fillText(formatMoney(parcel.cost), labelPoint.x, labelPoint.y + 12);
   ctx.restore();
 };
 
@@ -6157,7 +6227,7 @@ const updateStats = () => {
     welfareScore,
   } = state.stats;
   elements.statDay.textContent = day;
-  elements.statCash.textContent = formatCurrency(cash);
+  elements.statCash.textContent = formatMoney(cash);
   elements.statReputation.textContent = reputation;
   elements.statTreated.textContent = patientsTreated;
   elements.meters.cleanliness.value = cleanliness;
@@ -6471,7 +6541,7 @@ const updatePatientDetail = () => {
         const item = document.createElement("li");
         const method = entry.method ? ` • ${entry.method}` : "";
         const dayLabel = entry.day ? ` • Day ${entry.day}` : "";
-        item.textContent = `${entry.label ?? "Treatment"} • ¤${formatCurrency(entry.charge ?? 0)}${method}${dayLabel}`;
+        item.textContent = `${entry.label ?? "Treatment"} • ${formatMoney(entry.charge ?? 0)}${method}${dayLabel}`;
         curesList.appendChild(item);
       });
       if (detail.curesEmpty) {
@@ -6563,13 +6633,13 @@ const updateQueue = () => {
 
     const estimate = document.createElement("span");
     const preview = getBillingPreview(patient);
-    estimate.textContent = `Charge ¤${formatCurrency(preview.charge)} • ${preview.methodLabel}`;
-    const tooltipParts = [`Immediate ¤${formatCurrency(preview.netCash)}`];
+    estimate.textContent = `Charge ${formatMoney(preview.charge)} • ${preview.methodLabel}`;
+    const tooltipParts = [`Immediate ${formatMoney(preview.netCash)}`];
     if (preview.receivable) {
-      tooltipParts.push(`Deferred ¤${formatCurrency(preview.receivable)}`);
+      tooltipParts.push(`Deferred ${formatMoney(preview.receivable)}`);
     }
     if (preview.financeFee) {
-      tooltipParts.push(`Fee ¤${formatCurrency(preview.financeFee)}`);
+      tooltipParts.push(`Fee ${formatMoney(preview.financeFee)}`);
     }
     estimate.title = tooltipParts.join(" • ");
     meta.appendChild(estimate);
@@ -6628,9 +6698,9 @@ const renderLotOverviewList = () => {
     const statusClass = parcel.owned ? "owned" : "locked";
     const statusLabel = parcel.owned
       ? parcel.cost > 0
-        ? `Owned • ¤${formatCurrency(parcel.cost)}`
+        ? `Owned • ${formatMoney(parcel.cost)}`
         : "Owned starter parcel"
-      : `For sale • ¤${formatCurrency(parcel.cost)}`;
+      : `For sale • ${formatMoney(parcel.cost)}`;
     item.innerHTML = `
       <header>
         <h4>${parcel.name}</h4>
@@ -6685,7 +6755,7 @@ const renderPropertyMarket = () => {
       body.textContent = parcel.description;
       const cta = document.createElement("button");
       cta.type = "button";
-      cta.textContent = `Purchase for ¤${formatCurrency(parcel.cost)}`;
+      cta.textContent = `Purchase for ${formatMoney(parcel.cost)}`;
       cta.dataset.parcelId = parcel.id;
       cta.disabled = state.stats.cash < parcel.cost;
       cta.addEventListener("click", () => purchaseProperty(parcel.id));
@@ -6731,7 +6801,7 @@ const purchaseProperty = (parcelId) => {
   updateBuildGuidance();
   const coord = `${AXIS_LETTERS[parcel.x] ?? parcel.x + 1}${parcel.y + 1}`;
   logEvent(
-    `${parcel.name} purchased for ¤${formatCurrency(parcel.cost)}. New build area unlocks from ${coord}.`,
+    `${parcel.name} purchased for ${formatMoney(parcel.cost)}. New build area unlocks from ${coord}.`,
     "positive"
   );
 };
@@ -6761,7 +6831,7 @@ const renderBuildMenuRooms = () => {
     body.append(title, roleLabel, desc);
     const cost = document.createElement("span");
     cost.className = "build-card__cost";
-    cost.textContent = `¤${formatCurrency(room.cost)}`;
+    cost.textContent = formatMoney(room.cost);
     button.append(art, body, cost);
     button.addEventListener("click", () => {
       selectedRoom = room;
@@ -6794,7 +6864,7 @@ const renderLiveBuildPalette = () => {
     const title = document.createElement("strong");
     title.textContent = room.name;
     const meta = document.createElement("span");
-    meta.textContent = `¤${formatCurrency(room.cost)}`;
+    meta.textContent = formatMoney(room.cost);
     label.append(title, meta);
     button.append(art, label);
     button.addEventListener("click", () => {
@@ -7094,7 +7164,7 @@ const renderBuildMenuInteriors = () => {
     label.textContent = theme.label;
     const meta = document.createElement("span");
     meta.className = "build-chip__meta";
-    meta.textContent = `¤${formatCurrency(theme.cost)} build • Upkeep ¤${formatCurrency(theme.upkeep)}/day`;
+    meta.textContent = `${formatMoney(theme.cost)} build • Upkeep ${formatMoney(theme.upkeep)}/day`;
     textWrap.append(label, meta);
     button.append(art, textWrap);
     if (activeRoom.interiorId === theme.id) {
@@ -7182,6 +7252,242 @@ const setBuildMenuTab = (tab) => {
       panel.setAttribute("aria-hidden", key === tab ? "false" : "true");
     });
   }
+};
+
+const calculateDepartmentExpenses = () =>
+  state.departments.reduce((sum, departmentState) => {
+    const definition = getDepartmentDefinition(departmentState.id);
+    if (!definition || !departmentState.active) {
+      return sum;
+    }
+    const levelIndex = Math.max(
+      0,
+      DEPARTMENT_BUDGET_LEVEL_IDS.indexOf(departmentState.budgetLevel)
+    );
+    const level = getBudgetLevelDefinition(DEPARTMENT_BUDGET_LEVEL_IDS[levelIndex]);
+    const multiplier = level?.multiplier ?? 0;
+    const baseCost = definition.baseCost ?? 0;
+    return sum + baseCost * multiplier;
+  }, 0);
+
+const formatDepartmentCount = (value) =>
+  Math.max(0, Math.round(value ?? 0)).toLocaleString("en-US");
+
+const deriveDepartmentMetric = (metric, definition) => {
+  switch (metric.type) {
+    case "rooms": {
+      const roomIds = definition.rooms ?? [];
+      const count = state.rooms.filter((room) => roomIds.includes(room.type)).length;
+      return formatDepartmentCount(count);
+    }
+    case "staff": {
+      const roles = definition.roles ?? [];
+      const count = state.staff.filter((member) => roles.includes(member.role)).length;
+      return formatDepartmentCount(count);
+    }
+    case "campaigns": {
+      return formatDepartmentCount(state.marketingEffects.length);
+    }
+    case "installments": {
+      return formatDepartmentCount(state.installmentPlans.length);
+    }
+    case "receivablesBalance": {
+      const balance = state.installmentPlans.reduce((sum, plan) => sum + plan.remaining, 0);
+      return formatMoney(balance);
+    }
+    case "queue": {
+      const emergencies = state.queue.filter((patient) => patient.isEmergency).length;
+      return formatDepartmentCount(emergencies);
+    }
+    default:
+      return "—";
+  }
+};
+
+const ensureSelectedDepartment = () => {
+  if (selectedDepartmentId && getDepartmentDefinition(selectedDepartmentId)) {
+    return;
+  }
+  selectedDepartmentId = departmentCatalog[0]?.id ?? null;
+};
+
+const renderDepartments = () => {
+  const menu = elements.departments?.menu;
+  const detail = elements.departments?.detail;
+  if (!menu || !detail) return;
+  ensureSelectedDepartment();
+  const budgetLevels = departmentBudgetLevels;
+  const maxIndex = Math.max(0, DEPARTMENT_BUDGET_LEVEL_IDS.length - 1);
+
+  if (departmentsDirty) {
+    menu.innerHTML = "";
+    departmentCatalog.forEach((definition) => {
+      const button = document.createElement("button");
+      button.type = "button";
+      button.className = "department-menu__item";
+      button.dataset.departmentId = definition.id;
+      button.id = `department-tab-${definition.id}`;
+      button.setAttribute("role", "tab");
+      button.setAttribute("aria-controls", "department-detail");
+
+      const name = document.createElement("span");
+      name.className = "department-menu__name";
+      name.textContent = definition.name;
+
+      const category = document.createElement("span");
+      category.className = "department-menu__category";
+      category.textContent = definition.category;
+
+      const status = document.createElement("span");
+      status.className = "department-menu__status";
+      status.dataset.departmentStatus = definition.id;
+
+      button.append(name, category, status);
+      menu.appendChild(button);
+    });
+  }
+
+  departmentCatalog.forEach((definition) => {
+    const stateEntry = getDepartmentState(definition.id);
+    const active = stateEntry?.active !== false;
+    const levelIndex = Math.max(
+      0,
+      DEPARTMENT_BUDGET_LEVEL_IDS.indexOf(stateEntry?.budgetLevel ?? budgetLevels[0].id)
+    );
+    const levelId = DEPARTMENT_BUDGET_LEVEL_IDS[levelIndex] ?? budgetLevels[0].id;
+    const levelDef = getBudgetLevelDefinition(levelId);
+    const button = menu.querySelector(`[data-department-id="${definition.id}"]`);
+    if (button) {
+      button.classList.toggle("active", definition.id === selectedDepartmentId);
+      button.classList.toggle("department-menu__item--inactive", !active);
+      button.setAttribute(
+        "aria-selected",
+        definition.id === selectedDepartmentId ? "true" : "false"
+      );
+      button.setAttribute("tabindex", definition.id === selectedDepartmentId ? "0" : "-1");
+      const status = button.querySelector(`[data-department-status="${definition.id}"]`);
+      if (status) {
+        const baseCost = definition.baseCost ?? 0;
+        const projected = active ? baseCost * (levelDef?.multiplier ?? 0) : 0;
+        const label = active ? levelDef?.label ?? "Baseline" : "Paused";
+        status.textContent = `${label} • ${formatMoney(projected)}/day`;
+      }
+    }
+  });
+
+  detail.innerHTML = "";
+  const selectedDefinition = selectedDepartmentId
+    ? getDepartmentDefinition(selectedDepartmentId)
+    : null;
+  if (!selectedDefinition) {
+    const empty = document.createElement("p");
+    empty.className = "department-empty";
+    empty.textContent = "Select a department from the menu to view its controls.";
+    detail.removeAttribute("aria-labelledby");
+    detail.setAttribute("tabindex", "-1");
+    detail.appendChild(empty);
+    departmentsDirty = false;
+    return;
+  }
+
+  const stateEntry = getDepartmentState(selectedDepartmentId);
+  const active = stateEntry?.active !== false;
+  const levelIndex = Math.max(
+    0,
+    DEPARTMENT_BUDGET_LEVEL_IDS.indexOf(stateEntry?.budgetLevel ?? budgetLevels[0].id)
+  );
+  const levelId = DEPARTMENT_BUDGET_LEVEL_IDS[levelIndex] ?? budgetLevels[0].id;
+  const levelDef = getBudgetLevelDefinition(levelId);
+
+  const card = document.createElement("article");
+  card.className = "department-card";
+  card.dataset.departmentId = selectedDefinition.id;
+  if (!active) {
+    card.classList.add("department-card--inactive");
+  }
+
+  detail.setAttribute("aria-labelledby", `department-tab-${selectedDefinition.id}`);
+  detail.setAttribute("tabindex", "0");
+
+  const header = document.createElement("div");
+  header.className = "department-card__header";
+
+  const title = document.createElement("div");
+  title.className = "department-card__title";
+  const heading = document.createElement("h3");
+  heading.textContent = selectedDefinition.name;
+  const category = document.createElement("p");
+  category.className = "department-card__category";
+  category.textContent = selectedDefinition.category;
+  title.append(heading, category);
+
+  const toggle = document.createElement("button");
+  toggle.type = "button";
+  toggle.className = "department-card__toggle";
+  toggle.dataset.departmentToggle = selectedDefinition.id;
+  toggle.textContent = active ? "Active" : "Paused";
+  toggle.setAttribute("aria-pressed", active ? "true" : "false");
+  toggle.setAttribute(
+    "aria-label",
+    `${selectedDefinition.name} ${active ? "active" : "paused"}`
+  );
+
+  header.append(title, toggle);
+  card.appendChild(header);
+
+  const description = document.createElement("p");
+  description.className = "department-card__description";
+  description.textContent = selectedDefinition.description;
+  card.appendChild(description);
+
+  const metrics = document.createElement("div");
+  metrics.className = "department-card__metrics";
+  (selectedDefinition.metrics ?? []).forEach((metric) => {
+    const metricBlock = document.createElement("div");
+    metricBlock.className = "department-card__metric";
+    const label = document.createElement("span");
+    label.textContent = metric.label;
+    const value = document.createElement("span");
+    value.textContent = deriveDepartmentMetric(metric, selectedDefinition);
+    metricBlock.append(label, value);
+    metrics.appendChild(metricBlock);
+  });
+  card.appendChild(metrics);
+
+  const controls = document.createElement("div");
+  controls.className = "department-card__controls";
+  const label = document.createElement("label");
+  label.innerHTML = "<span>Focus budget</span>";
+  const slider = document.createElement("input");
+  slider.type = "range";
+  slider.min = "0";
+  slider.max = String(maxIndex);
+  slider.step = "1";
+  slider.dataset.departmentBudget = selectedDefinition.id;
+  slider.value = String(levelIndex);
+  slider.setAttribute("aria-valuenow", String(levelIndex));
+  if (levelDef) {
+    slider.setAttribute("aria-valuetext", levelDef.label);
+  }
+  label.appendChild(slider);
+  controls.appendChild(label);
+
+  const budgetText = document.createElement("div");
+  budgetText.className = "department-card__budget";
+  const baseCost = selectedDefinition.baseCost ?? 0;
+  const projected = active ? baseCost * (levelDef?.multiplier ?? 0) : 0;
+  const labelText = levelDef?.label ?? "Baseline";
+  budgetText.textContent = `${labelText} • ${formatMoney(projected)}/day${
+    active ? "" : " (paused)"
+  }`;
+  if (levelDef?.description) {
+    budgetText.title = levelDef.description;
+  }
+  controls.appendChild(budgetText);
+  card.appendChild(controls);
+
+  detail.appendChild(card);
+  departmentsDirty = false;
 };
 
 const updateBuildTabStates = () => {
@@ -7490,7 +7796,7 @@ const renderCandidates = () => {
     card.querySelector(".name").textContent = candidate.name;
     card.querySelector(".role").textContent = formatStaffRole(candidate.role);
     card.querySelector(".traits").textContent = `Trait: ${candidate.trait}`;
-    card.querySelector(".cost").textContent = formatCurrency(candidate.salary);
+    card.querySelector(".cost").textContent = formatMoney(candidate.salary);
     card.querySelector(".hire-button").addEventListener("click", () => hireStaff(candidate.id));
     elements.staffCandidates.appendChild(card);
   });
@@ -7521,7 +7827,7 @@ const renderProjects = () => {
     progress.value = project.progress;
     progress.max = 100;
     const button = card.querySelector(".invest-button");
-    button.querySelector(".cost").textContent = formatCurrency(project.cost);
+    button.querySelector(".cost").textContent = formatMoney(project.cost);
     button.disabled = project.unlocked;
     button.addEventListener("click", () => investResearch(project.id));
     elements.researchProjects.appendChild(card);
@@ -7536,7 +7842,7 @@ const renderCampaigns = () => {
     card.querySelector(".name").textContent = campaign.name;
     card.querySelector(".desc").textContent = campaign.desc;
     const button = card.querySelector(".launch-button");
-    button.querySelector(".cost").textContent = formatCurrency(campaign.cost);
+    button.querySelector(".cost").textContent = formatMoney(campaign.cost);
     button.addEventListener("click", () => launchCampaign(campaign.id));
     elements.marketingCampaigns.appendChild(card);
   });
@@ -7552,7 +7858,7 @@ const renderBillingLedger = () => {
       li.innerHTML = `
         <div class="ledger-row">
           <span>${entry.name}</span>
-          <span class="amount ${amountClass}">¤${formatCurrency(entry.amount)}</span>
+          <span class="amount ${amountClass}">${formatMoney(entry.amount)}</span>
         </div>
         <div class="ledger-row">
           <span>${entry.detail ?? ""}</span>
@@ -7564,7 +7870,7 @@ const renderBillingLedger = () => {
         `
           <div class="ledger-row">
             <span>${entry.name}</span>
-            <span class="amount ${amountClass}">¤${formatCurrency(entry.amount)}</span>
+            <span class="amount ${amountClass}">${formatMoney(entry.amount)}</span>
           </div>
         `,
         `
@@ -7576,7 +7882,7 @@ const renderBillingLedger = () => {
         `
           <div class="ledger-row">
             <span>${entry.method ?? "Billing"}</span>
-            <span>Charge ¤${formatCurrency(entry.charge ?? 0)}</span>
+            <span>Charge ${formatMoney(entry.charge ?? 0)}</span>
           </div>
         `,
       ];
@@ -7584,7 +7890,7 @@ const renderBillingLedger = () => {
         rows.push(`
           <div class="ledger-row">
             <span>Deferred Balance</span>
-            <span>¤${formatCurrency(entry.deferred)}${entry.term ? ` • ${entry.term}d` : ""}</span>
+            <span>${formatMoney(entry.deferred)}${entry.term ? ` • ${entry.term}d` : ""}</span>
           </div>
         `);
       }
@@ -7592,7 +7898,7 @@ const renderBillingLedger = () => {
         rows.push(`
           <div class="ledger-row">
             <span>Processing Fee</span>
-            <span class="amount negative">-¤${formatCurrency(entry.financeFee)}</span>
+            <span class="amount negative">${formatMoney(-entry.financeFee)}</span>
           </div>
         `);
       }
@@ -7619,7 +7925,7 @@ const recordLedgerEvent = ({ name, detail, amount, tag = "" }) => {
 const createAutoSaveLabel = () => {
   const roomCount = state.rooms.length;
   const roomLabel = `${roomCount} room${roomCount === 1 ? "" : "s"}`;
-  return `Day ${state.stats.day} • ${roomLabel} • ¤${formatCurrency(state.stats.cash)}`;
+  return `Day ${state.stats.day} • ${roomLabel} • ${formatMoney(state.stats.cash)}`;
 };
 
 const createSaveSnapshot = (labelInput) => {
@@ -7867,6 +8173,7 @@ const applySaveSnapshot = (snapshot) => {
 
   state.properties = deepClone(payload.properties ?? createPropertyState());
   state.rooms = deepClone(payload.rooms ?? []);
+  markDepartmentsDirty();
   state.rooms.forEach((room) => {
     if (typeof room.builtAt !== "number") {
       room.builtAt = 0;
@@ -7878,6 +8185,7 @@ const applySaveSnapshot = (snapshot) => {
     state.shells = deriveCampusShells();
   }
   state.staff = deepClone(payload.staff ?? []);
+  markDepartmentsDirty();
   state.candidates = deepClone(payload.candidates ?? []);
   state.queue = deepClone(payload.queue ?? []);
   const queueMap = new Map(state.queue.map((patient) => [patient.id, patient]));
@@ -8050,7 +8358,7 @@ const updateSaveSlotList = () => {
         parts.push(`${rooms.length} room${rooms.length === 1 ? "" : "s"}`);
       }
       if (typeof stats.cash === "number") {
-        parts.push(`¤${formatCurrency(stats.cash)}`);
+        parts.push(formatMoney(stats.cash));
       }
       meta.textContent = parts.filter(Boolean).join(" • ") || "Saved game";
     } else {
@@ -8324,6 +8632,7 @@ const hireStaff = (candidateId) => {
   }
   state.stats.cash -= candidate.salary * 5;
   state.staff.push({ ...candidate, assignedRoom: null });
+  markDepartmentsDirty();
   state.candidates = state.candidates.filter((c) => c.id !== candidateId);
   state.candidates.push(generateCandidate());
   logEvent(`Hired ${candidate.name}, a ${formatStaffRole(candidate.role)}.`, "positive");
@@ -8371,7 +8680,7 @@ const placeRoomAt = (x, y, layout, { fromDrag = false } = {}) => {
   });
   if (state.stats.cash < preview.totalCost) {
     logEvent(
-      `Not enough cash to build ${blueprint.name} with the selected upgrades (requires ¤${formatCurrency(preview.totalCost)}).`,
+      `Not enough cash to build ${blueprint.name} with the selected upgrades (requires ${formatMoney(preview.totalCost)}).`,
       "negative"
     );
     updateBuildGuidance();
@@ -8408,6 +8717,7 @@ const placeRoomAt = (x, y, layout, { fromDrag = false } = {}) => {
   };
   occupyRoomFootprint(room);
   state.rooms.push(room);
+  markDepartmentsDirty();
   ensureRoomStructure(room);
   state.stats.cash -= preview.totalCost;
   state.stats.expensesToday += preview.totalCost;
@@ -8427,7 +8737,7 @@ const placeRoomAt = (x, y, layout, { fromDrag = false } = {}) => {
   updateDesignerSummary();
   updateBuildGuidance();
   logEvent(
-    `${blueprint.name} constructed at ${coordLabel} (${footprint.width}×${footprint.height}) for ¤${formatCurrency(
+    `${blueprint.name} constructed at ${coordLabel} (${footprint.width}×${footprint.height}) for ${formatMoney(
       preview.totalCost
     )} with ${machines.length} machines and ${decorations.length} decor upgrades.`,
     "positive"
@@ -8587,6 +8897,7 @@ const launchCampaign = (campaignId) => {
     ...campaign,
     remaining: campaign.duration,
   });
+  markDepartmentsDirty();
   logEvent(`${campaign.name} launched!`, "positive");
   updateStats();
 };
@@ -8790,11 +9101,11 @@ const completeTreatment = (patient, treatmentRoom) => {
   if (patient.cureHistory.length > 5) {
     patient.cureHistory.length = 5;
   }
-  let logMessage = `${patient.name} treated for ${patient.ailment.name} (${patient.profile.label}). Charge ¤${formatCurrency(
+  let logMessage = `${patient.name} treated for ${patient.ailment.name} (${patient.profile.label}). Charge ${formatMoney(
     outcome.charge
   )} via ${outcome.methodLabel}.`;
   if (outcome.receivable) {
-    logMessage += ` ¤${formatCurrency(outcome.receivable)} scheduled for installments.`;
+    logMessage += ` ${formatMoney(outcome.receivable)} scheduled for installments.`;
   }
   logEvent(logMessage, "positive");
   patient.status = "leaving";
@@ -9143,7 +9454,7 @@ const handleFacilitiesUpkeep = () => {
       tag: "Amenity",
     });
     if (Math.random() < 0.3) {
-      logEvent(`ATM fees added ¤${formatCurrency(fees)} to today's takings.`, "positive");
+      logEvent(`ATM fees added ${formatMoney(fees)} to today's takings.`, "positive");
     }
   }
 
@@ -9237,7 +9548,7 @@ const logDailySummary = () => {
   const net = revenue - expenses;
   const tone = net >= 0 ? "positive" : "negative";
   logEvent(
-    `Day ${state.stats.day} summary — Revenue: ¤${formatCurrency(revenue)}, Expenses: ¤${formatCurrency(expenses)}, Net: ¤${formatCurrency(net)}.`,
+    `Day ${state.stats.day} summary — Revenue: ${formatMoney(revenue)}, Expenses: ${formatMoney(expenses)}, Net: ${formatMoney(net)}.`,
     tone
   );
 };
@@ -9246,10 +9557,21 @@ const payExpenses = () => {
   const wages = state.staff.reduce((sum, staff) => sum + staff.salary, 0);
   const upkeep = state.rooms.reduce((sum, room) => sum + room.upkeep, 0);
   const overtimeCost = elements.policies.overtime.checked ? wages * 0.15 : 0;
-  const total = wages + upkeep + overtimeCost;
+  const departmentCost = calculateDepartmentExpenses();
+  const total = wages + upkeep + overtimeCost + departmentCost;
   state.stats.cash -= total;
   state.stats.expensesToday += total;
-  logEvent(`Daily upkeep paid: ¤${formatCurrency(total)}.`, "neutral");
+  const breakdown = [
+    `wages ${formatMoney(wages)}`,
+    `upkeep ${formatMoney(upkeep)}`,
+  ];
+  if (departmentCost > 0) {
+    breakdown.push(`departments ${formatMoney(departmentCost)}`);
+  }
+  if (overtimeCost > 0) {
+    breakdown.push(`overtime ${formatMoney(overtimeCost)}`);
+  }
+  logEvent(`Daily operations spend: ${formatMoney(total)} (${breakdown.join(", ")}).`, "neutral");
   if (state.stats.cash < 0) {
     state.stats.reputation = Math.max(0, state.stats.reputation - 3);
     logEvent("Debt accrued! Reputation suffers.", "negative");
@@ -9286,6 +9608,7 @@ const processMarketingEffects = () => {
     }
     return effect.remaining > 0;
   });
+  markDepartmentsDirty();
 };
 
 const updateDailyReport = () => {
@@ -9302,19 +9625,21 @@ const updateDailyReport = () => {
     state.installmentPlans.reduce((sum, plan) => sum + plan.remaining, 0)
   );
   const report = `
-    <div><strong>Wages:</strong> ¤${formatCurrency(wages)}</div>
-    <div><strong>Upkeep:</strong> ¤${formatCurrency(upkeep)}</div>
+    <div><strong>Wages:</strong> ${formatMoney(wages)}</div>
+    <div><strong>Upkeep:</strong> ${formatMoney(upkeep)}</div>
+    <div><strong>Departments:</strong> ${formatMoney(calculateDepartmentExpenses())}</div>
     <div><strong>Queue:</strong> ${state.queue.length} patients</div>
     <div><strong>Marketing:</strong> ${state.marketingEffects.length} active</div>
     <div><strong>Grounds:</strong> ${Math.round(state.stats.grounds)} / 100</div>
     <div><strong>Litter:</strong> ${litterCount} pile${litterCount === 1 ? "" : "s"}</div>
-    <div><strong>Loans Outstanding:</strong> ¤${formatCurrency(loanBalance)}</div>
-    <div><strong>Receivables:</strong> ¤${formatCurrency(receivables)}</div>
-    <div><strong>Revenue Today:</strong> ¤${formatCurrency(revenue)}</div>
-    <div><strong>Expenses Today:</strong> ¤${formatCurrency(expenses)}</div>
-    <div><strong>Net:</strong> ¤${formatCurrency(net)}</div>
+    <div><strong>Loans Outstanding:</strong> ${formatMoney(loanBalance)}</div>
+    <div><strong>Receivables:</strong> ${formatMoney(receivables)}</div>
+    <div><strong>Revenue Today:</strong> ${formatMoney(revenue)}</div>
+    <div><strong>Expenses Today:</strong> ${formatMoney(expenses)}</div>
+    <div><strong>Net:</strong> ${formatMoney(net)}</div>
   `;
   elements.dailyReport.innerHTML = report;
+  renderDepartments();
 };
 
 const updateUI = () => {
@@ -9328,6 +9653,7 @@ const updateUI = () => {
   renderBillingLedger();
   updateDailyReport();
   updateFinancePanels();
+  renderDepartments();
 };
 
 const tick = () => {
@@ -9441,11 +9767,53 @@ const setupMenuRail = () => {
       }
       menuOptions.forEach((opt) => opt.classList.remove("active"));
       option.classList.add("active");
+      const departmentTarget = option.dataset.departmentTarget;
+      if (departmentTarget) {
+        selectedDepartmentId = departmentTarget;
+        markDepartmentsDirty();
+        renderDepartments();
+      }
       if (panelSelector) {
         setTimeout(() => highlightPanel(panelSelector), 150);
       }
     });
   });
+};
+
+const setupDepartmentControls = () => {
+  const menu = elements.departments?.menu;
+  const detail = elements.departments?.detail;
+  if (menu) {
+    menu.addEventListener("click", (event) => {
+      const button = event.target.closest("[data-department-id]");
+      if (!button) return;
+      const id = button.dataset.departmentId;
+      if (!id || id === selectedDepartmentId) return;
+      selectedDepartmentId = id;
+      renderDepartments();
+    });
+  }
+  if (detail) {
+    detail.addEventListener("click", (event) => {
+      const toggle = event.target.closest("[data-department-toggle]");
+      if (!toggle) return;
+      const id = toggle.dataset.departmentToggle;
+      if (!id) return;
+      const current = getDepartmentState(id);
+      setDepartmentActive(id, !(current?.active ?? true));
+      renderDepartments();
+    });
+    detail.addEventListener("input", (event) => {
+      const slider = event.target.closest("[data-department-budget]");
+      if (!slider) return;
+      const id = slider.dataset.departmentBudget;
+      if (!id) return;
+      const index = Number.parseInt(slider.value, 10);
+      const levelId = DEPARTMENT_BUDGET_LEVEL_IDS[index] ?? DEPARTMENT_BUDGET_LEVEL_IDS[0];
+      setDepartmentBudgetLevel(id, levelId);
+      renderDepartments();
+    });
+  }
 };
 
 const setupTabs = () => {
@@ -9533,6 +9901,7 @@ const init = () => {
   renderPropertyMarket();
   setupTabs();
   setupMenuRail();
+  setupDepartmentControls();
   setupAudioControls();
   refreshCandidates();
   renderCandidates();
@@ -9540,6 +9909,7 @@ const init = () => {
   renderProjects();
   renderCampaigns();
   updateObjectives();
+  renderDepartments();
   updateStats();
   updateQueue();
   renderBillingLedger();

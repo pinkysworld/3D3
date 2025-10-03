@@ -519,6 +519,256 @@ progress::-moz-progress-bar {
   box-shadow: none;
 }
 
+.department-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 1.5rem;
+  margin-top: 1.5rem;
+}
+
+.department-legend {
+  border-radius: 12px;
+  padding: 1rem;
+  background: rgba(15, 23, 42, 0.7);
+  border: 1px solid rgba(148, 163, 184, 0.18);
+  box-shadow: inset 0 1px 0 rgba(248, 250, 252, 0.05);
+}
+
+.department-legend p {
+  margin: 0;
+  color: rgba(203, 213, 225, 0.86);
+  font-size: 0.9rem;
+  line-height: 1.5;
+}
+
+.department-layout {
+  display: grid;
+  grid-template-columns: minmax(220px, 0.75fr) 1fr;
+  gap: 1.5rem;
+  align-items: start;
+}
+
+@media (max-width: 1100px) {
+  .department-layout {
+    grid-template-columns: 1fr;
+  }
+}
+
+.department-menu {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  padding: 1rem;
+  border-radius: 16px;
+  background: rgba(15, 23, 42, 0.72);
+  border: 1px solid rgba(148, 163, 184, 0.18);
+  box-shadow: inset 0 1px 0 rgba(248, 250, 252, 0.04);
+}
+
+.department-menu__item {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  padding: 0.65rem 0.75rem;
+  border-radius: 0.85rem;
+  border: 1px solid transparent;
+  background: rgba(15, 23, 42, 0.55);
+  color: rgba(226, 232, 240, 0.9);
+  text-align: left;
+  cursor: pointer;
+  transition: border-color 0.2s ease, box-shadow 0.2s ease, transform 0.15s ease;
+}
+
+.department-menu__item:hover,
+.department-menu__item:focus-visible {
+  border-color: rgba(56, 189, 248, 0.5);
+  box-shadow: 0 10px 16px rgba(8, 27, 55, 0.32);
+  outline: none;
+  transform: translateY(-1px);
+}
+
+.department-menu__item.active {
+  border-color: rgba(56, 189, 248, 0.75);
+  background: linear-gradient(150deg, rgba(30, 64, 175, 0.9), rgba(56, 189, 248, 0.35));
+  box-shadow: 0 14px 24px rgba(8, 36, 64, 0.38);
+}
+
+.department-menu__item--inactive {
+  opacity: 0.75;
+}
+
+.department-menu__name {
+  font-weight: 600;
+}
+
+.department-menu__category {
+  font-size: 0.7rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: rgba(148, 163, 184, 0.75);
+}
+
+.department-menu__status {
+  font-size: 0.8rem;
+  color: rgba(148, 197, 255, 0.9);
+}
+
+.department-detail {
+  min-height: 100%;
+}
+
+.department-empty {
+  margin: 0;
+  padding: 1.25rem;
+  border-radius: 16px;
+  background: rgba(15, 23, 42, 0.7);
+  border: 1px solid rgba(148, 163, 184, 0.18);
+  color: rgba(226, 232, 240, 0.88);
+  line-height: 1.6;
+}
+
+.department-card {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 0.9rem;
+  padding: 1rem;
+  border-radius: 16px;
+  background: linear-gradient(160deg, rgba(15, 23, 42, 0.82), rgba(30, 41, 59, 0.88));
+  border: 1px solid rgba(148, 163, 184, 0.24);
+  box-shadow:
+    0 18px 30px rgba(7, 16, 36, 0.38),
+    inset 0 1px 0 rgba(248, 250, 252, 0.05);
+  transition: transform 0.2s ease, box-shadow 0.2s ease, border-color 0.2s ease;
+}
+
+.department-card:hover {
+  transform: translateY(-2px);
+  border-color: rgba(56, 189, 248, 0.35);
+  box-shadow:
+    0 24px 38px rgba(8, 27, 55, 0.42),
+    inset 0 1px 0 rgba(248, 250, 252, 0.08);
+}
+
+.department-card--inactive {
+  opacity: 0.7;
+  filter: saturate(0.85);
+}
+
+.department-card__header {
+  display: flex;
+  justify-content: space-between;
+  gap: 0.75rem;
+  align-items: flex-start;
+}
+
+.department-card__title {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+}
+
+.department-card__title h3 {
+  margin: 0;
+  font-size: 1.1rem;
+}
+
+.department-card__category {
+  margin: 0;
+  font-size: 0.75rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: rgba(148, 163, 184, 0.75);
+}
+
+.department-card__description {
+  margin: 0;
+  font-size: 0.85rem;
+  color: rgba(226, 232, 240, 0.92);
+  line-height: 1.5;
+}
+
+.department-card__toggle {
+  border: none;
+  border-radius: 999px;
+  padding: 0.35rem 0.85rem;
+  font-size: 0.75rem;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  cursor: pointer;
+  color: #0f172a;
+  background: linear-gradient(135deg, #38bdf8, #22d3ee);
+  box-shadow: 0 0 0 1px rgba(15, 23, 42, 0.5);
+  transition: filter 0.2s ease, box-shadow 0.2s ease;
+}
+
+.department-card__toggle[aria-pressed="false"] {
+  background: linear-gradient(135deg, rgba(148, 163, 184, 0.4), rgba(71, 85, 105, 0.55));
+  color: rgba(226, 232, 240, 0.8);
+}
+
+.department-card__toggle:hover {
+  filter: brightness(1.05);
+  box-shadow: 0 0 0 1px rgba(148, 197, 255, 0.6), 0 8px 18px rgba(14, 116, 144, 0.28);
+}
+
+.department-card__metrics {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+  gap: 0.75rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.department-card__metric {
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+  padding: 0.6rem 0.75rem;
+  border-radius: 0.75rem;
+  background: rgba(15, 23, 42, 0.6);
+  border: 1px solid rgba(94, 134, 196, 0.24);
+}
+
+.department-card__metric span:first-child {
+  font-size: 0.7rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: rgba(148, 163, 184, 0.75);
+}
+
+.department-card__metric span:last-child {
+  font-size: 1.1rem;
+  font-weight: 700;
+  color: rgba(248, 250, 252, 0.95);
+}
+
+.department-card__controls {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.department-card__controls label {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+  font-size: 0.8rem;
+  color: rgba(203, 213, 225, 0.9);
+}
+
+.department-card__controls input[type="range"] {
+  width: 100%;
+  accent-color: #38bdf8;
+}
+
+.department-card__budget {
+  font-size: 0.8rem;
+  color: rgba(226, 232, 240, 0.85);
+}
+
 .loan-offer button:hover:not(:disabled) {
   transform: translateY(-1px);
   box-shadow: 0 6px 12px rgba(14, 165, 233, 0.25);
@@ -2014,6 +2264,10 @@ progress::-moz-progress-bar {
   isolation: isolate;
   transform-origin: center center;
   transition: background 0.4s ease, box-shadow 0.4s ease;
+  image-rendering: auto;
+  image-rendering: optimizeQuality;
+  backface-visibility: hidden;
+  will-change: transform, filter;
 }
 
 #hospital-canvas::after {
