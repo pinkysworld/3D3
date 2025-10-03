@@ -63,6 +63,7 @@ import {
   withAlpha,
 } from "./js/utils/helpers.js";
 import { createRenderEngine } from "./js/graphics/renderEngine.js";
+import { createThreeSceneRenderer } from "./js/graphics/threeScene.js";
 
 const showcaseAnimation = {
   time: 0,
@@ -342,7 +343,9 @@ const ensureGridCapacity = () => {
 
 const elements = {
   grid: document.querySelector("#grid"),
+  hospitalView: document.querySelector(".hospital-view"),
   hospitalCanvas: document.querySelector("#hospital-canvas"),
+  hospitalCanvas3D: document.querySelector("#hospital-3d-canvas"),
   buildOptions: document.querySelector("#build-options"),
   buildMenu: document.querySelector("#build-menu"),
   buildMenuTabs: Array.from(document.querySelectorAll("[data-build-tab]")),
@@ -468,6 +471,11 @@ const menuOptions = Array.from(
 );
 
 const renderEngine = createRenderEngine({ tileSize: CANVAS_CELL });
+let threeRenderer = null;
+let isThreeSceneActive = false;
+
+const defaultViewHintText = elements.viewHint?.textContent ?? "";
+const threeViewHintText = "Drag to orbit • Scroll to zoom • Double-click to reset camera";
 
 let selectedRoom = null;
 let patientIdCounter = 1;
@@ -510,6 +518,146 @@ const invalidateCanvasCache = () => {
   lockedTileSprite = null;
   isoMapperCache = null;
   renderEngine.invalidate();
+};
+
+const ensureThreeRenderer = () => {
+  if (threeRenderer || typeof window === "undefined") {
+    return threeRenderer;
+  }
+  if (!elements.hospitalCanvas3D) {
+    return null;
+  }
+  threeRenderer = createThreeSceneRenderer({
+    canvas: elements.hospitalCanvas3D,
+    pixelRatio: window.devicePixelRatio || 1,
+  });
+  return threeRenderer;
+};
+
+const setupThreeCanvas = () => {
+  if (typeof window === "undefined" || !elements.hospitalCanvas3D) {
+    return;
+  }
+  const renderer = ensureThreeRenderer();
+  if (!renderer?.isSupported) {
+    isThreeSceneActive = false;
+    elements.hospitalCanvas3D.setAttribute("hidden", "true");
+    return;
+  }
+  const width = getGridWidth() * CANVAS_CELL;
+  const height = getGridHeight() * CANVAS_CELL;
+  renderer.resize(width, height);
+  renderer.setGridSize(getGridWidth(), getGridHeight());
+  elements.hospitalCanvas3D.style.width = "100%";
+  elements.hospitalCanvas3D.style.height = "auto";
+  elements.hospitalCanvas3D.style.maxWidth = `${width}px`;
+};
+
+const updateThreeSceneActivation = () => {
+  const renderer = viewMode === "showcase" ? ensureThreeRenderer() : threeRenderer;
+  const shouldActivate = Boolean(renderer?.isSupported && viewMode === "showcase");
+  isThreeSceneActive = shouldActivate;
+  if (renderer?.isSupported) {
+    renderer.setEnabled(shouldActivate);
+    if (shouldActivate) {
+      renderer.setGridSize(getGridWidth(), getGridHeight());
+      updateThreeScene();
+    }
+  }
+  if (elements.hospitalCanvas) {
+    elements.hospitalCanvas.classList.toggle("uses-three", shouldActivate);
+    elements.hospitalCanvas.setAttribute("data-view-mode", viewMode);
+  }
+  if (elements.hospitalCanvas3D) {
+    if (shouldActivate) {
+      elements.hospitalCanvas3D.removeAttribute("hidden");
+      elements.hospitalCanvas3D.setAttribute("aria-hidden", "false");
+    } else {
+      elements.hospitalCanvas3D.setAttribute("hidden", "true");
+      elements.hospitalCanvas3D.setAttribute("aria-hidden", "true");
+    }
+  }
+  if (elements.hospitalView) {
+    elements.hospitalView.setAttribute("data-view-mode", viewMode);
+  }
+};
+
+const updateThreeScene = () => {
+  if (!isThreeSceneActive) {
+    return;
+  }
+  const renderer = ensureThreeRenderer();
+  if (!renderer?.isSupported) {
+    return;
+  }
+  const grid = { width: getGridWidth(), height: getGridHeight() };
+  const rooms = state.rooms.map((room) => {
+    const blueprint = getBlueprint(room.type);
+    const theme = getInteriorTheme(room.interiorId);
+    const sprite = getRoomTileSprite(theme, room.type, {
+      color: theme.palette?.accent ?? theme.palette?.mid,
+    });
+    return {
+      id: room.id,
+      x: room.x,
+      y: room.y,
+      width: room.width,
+      height: room.height,
+      label: blueprint?.name ?? room.type,
+      palette: theme.palette ?? {},
+      sprite,
+    };
+  });
+  const parcels = state.properties.map((parcel) => ({
+    id: parcel.id,
+    x: parcel.x,
+    y: parcel.y,
+    width: parcel.width,
+    height: parcel.height,
+    owned: Boolean(parcel.owned),
+  }));
+  const shells = state.shells.map((shell) => ({
+    id: shell.id,
+    x: shell.x,
+    y: shell.y,
+    width: shell.width,
+    height: shell.height,
+    doors: Array.isArray(shell.doors)
+      ? shell.doors.map((door) => ({ ...door }))
+      : [],
+    windows: Array.isArray(shell.windows)
+      ? shell.windows.map((window) => ({ ...window }))
+      : [],
+  }));
+  const agents = [
+    ...state.patientsOnSite
+      .filter((patient) => patient?.position)
+      .map((patient) => {
+        const palette = getPatientAvatarPalette(patient);
+        return {
+          id: `patient-${patient.id}`,
+          type: "patient",
+          position: patient.position,
+          color: palette.outfit,
+          accent: palette.accent,
+          isEmergency: Boolean(patient.isEmergency),
+        };
+      }),
+    ...state.staffAgents
+      .filter((agent) => agent?.position)
+      .map((agent) => {
+        const palette = getStaffAvatarPalette(agent);
+        return {
+          id: `staff-${agent.id}`,
+          type: "staff",
+          position: agent.position,
+          color: palette.outfit,
+          accent: palette.accent,
+          label: (agent.staff?.role ?? "").charAt(0).toUpperCase(),
+        };
+      }),
+  ];
+  renderer.updateScene({ grid, parcels, rooms, shells, agents });
 };
 
 const loadAudioSettings = () => {
@@ -790,6 +938,11 @@ const computeWheelZoomFactor = (deltaY) => {
 };
 
 const constrainShowcasePan = () => {
+  if (isThreeSceneActive) {
+    showcasePanX = 0;
+    showcasePanY = 0;
+    return;
+  }
   const width = getGridWidth() * CANVAS_CELL;
   const height = getGridHeight() * CANVAS_CELL;
   const horizontalAllowance = Math.max(0, (width - width / showcaseZoom) / 2);
@@ -827,6 +980,11 @@ const setShowcaseRotation = (value, { forceRender = false } = {}) => {
 
 const adjustShowcaseRotation = (delta) => {
   if (!delta) return;
+  if (isThreeSceneActive) {
+    const renderer = ensureThreeRenderer();
+    renderer?.rotate?.(delta);
+    return;
+  }
   setShowcaseRotation(showcaseRotation + delta);
 };
 
@@ -837,17 +995,34 @@ const updateShowcaseZoomIndicator = () => {
   if (viewMode !== "showcase") {
     container.setAttribute("hidden", "true");
     elements.viewHint?.setAttribute("hidden", "true");
+    if (elements.viewHint && defaultViewHintText) {
+      elements.viewHint.textContent = defaultViewHintText;
+    }
     return;
   }
   container.removeAttribute("hidden");
   elements.viewHint?.removeAttribute("hidden");
+  if (isThreeSceneActive) {
+    indicator.textContent = "3D";
+    if (elements.viewHint) {
+      elements.viewHint.textContent = threeViewHintText;
+    }
+    return;
+  }
   indicator.textContent = `${Math.round(showcaseZoom * 100)}%`;
+  if (elements.viewHint && defaultViewHintText) {
+    elements.viewHint.textContent = defaultViewHintText;
+  }
 };
 
 const setShowcaseZoom = (
   value,
   { focusX = null, focusY = null, skipPanAdjustment = false, forceRender = false } = {}
 ) => {
+  if (isThreeSceneActive) {
+    updateShowcaseZoomIndicator();
+    return;
+  }
   const previous = showcaseZoom;
   const clamped = clamp(value, MIN_SHOWCASE_ZOOM, MAX_SHOWCASE_ZOOM);
   const changed = Math.abs(clamped - showcaseZoom) > 0.001;
@@ -870,6 +1045,14 @@ const setShowcaseZoom = (
 };
 
 const adjustShowcaseZoom = (factor, options = {}) => {
+  if (isThreeSceneActive) {
+    const renderer = ensureThreeRenderer();
+    if (renderer?.zoomBy && factor) {
+      renderer.zoomBy(factor);
+    }
+    updateShowcaseZoomIndicator();
+    return;
+  }
   setShowcaseZoom(showcaseZoom * factor, options);
 };
 
@@ -931,6 +1114,7 @@ const findPatientNearTile = (tile) => {
 
 const handleCanvasClick = (event) => {
   if (viewMode !== "showcase") return;
+  if (isThreeSceneActive) return;
   if (isShowcasePanning || buildPreviewState.active) return;
   const tile = getShowcaseTileFromEvent(event);
   const patient = findPatientNearTile(tile);
@@ -1052,6 +1236,9 @@ const handleCanvasWheel = (event) => {
   if (viewMode !== "showcase") {
     return;
   }
+  if (isThreeSceneActive) {
+    return;
+  }
   event.preventDefault();
   const factor = computeWheelZoomFactor(event.deltaY);
   if (factor !== 1) {
@@ -1069,6 +1256,12 @@ const handleCanvasDoubleClick = (event) => {
 };
 
 const resetShowcaseView = () => {
+  if (isThreeSceneActive) {
+    const renderer = ensureThreeRenderer();
+    renderer?.resetCamera?.();
+    updateShowcaseZoomIndicator();
+    return;
+  }
   endShowcasePan();
   endShowcaseRotation();
   showcasePanX = 0;
@@ -1078,6 +1271,7 @@ const resetShowcaseView = () => {
 };
 
 const beginShowcaseRotation = (pointerId, clientX, clientY, target) => {
+  if (isThreeSceneActive) return;
   endShowcasePan();
   isShowcaseRotating = true;
   showcaseRotatePointerId = pointerId ?? null;
@@ -1087,6 +1281,9 @@ const beginShowcaseRotation = (pointerId, clientX, clientY, target) => {
 };
 
 const updateShowcaseRotationFromPointer = (event) => {
+  if (isThreeSceneActive) {
+    return false;
+  }
   if (!isShowcaseRotating || event.pointerId !== showcaseRotatePointerId) {
     return false;
   }
@@ -1117,6 +1314,7 @@ const endShowcasePan = () => {
 
 const handleCanvasPointerDown = (event) => {
   if (viewMode !== "showcase") return;
+  if (isThreeSceneActive) return;
   const isMouse = event.pointerType === "mouse";
   const isPrimaryButton = isMouse ? event.button === 0 : true;
   if (isPrimaryButton && isStructurePlacementActive()) {
@@ -1161,6 +1359,9 @@ const handleCanvasPointerDown = (event) => {
 };
 
 const handleCanvasPointerMove = (event) => {
+  if (isThreeSceneActive) {
+    return;
+  }
   if (
     buildPreviewState.active &&
     (buildPreviewState.pointerId === null || event.pointerId === buildPreviewState.pointerId)
@@ -1197,6 +1398,9 @@ const handleCanvasPointerMove = (event) => {
 };
 
 const handleCanvasPointerUp = (event) => {
+  if (isThreeSceneActive) {
+    return;
+  }
   if (
     buildPreviewState.active &&
     (buildPreviewState.pointerId === null || event.pointerId === buildPreviewState.pointerId)
@@ -1228,6 +1432,9 @@ const handleCanvasPointerUp = (event) => {
 };
 
 const handleCanvasPointerCancel = (event) => {
+  if (isThreeSceneActive) {
+    return;
+  }
   if (
     buildPreviewState.active &&
     (buildPreviewState.pointerId === null || event.pointerId === buildPreviewState.pointerId)
@@ -1250,6 +1457,9 @@ const handleCanvasPointerCancel = (event) => {
 };
 
 const handleCanvasPointerLeave = (event) => {
+  if (isThreeSceneActive) {
+    return;
+  }
   if (!buildPreviewState.active) {
     clearBuildHover();
   }
@@ -1264,6 +1474,21 @@ const createOffscreenCanvas = (width, height) => {
   canvas.width = width;
   canvas.height = height;
   return canvas;
+};
+
+const drawRoundedRect = (ctx, x, y, width, height, radius) => {
+  const r = Math.max(0, Math.min(radius, width / 2, height / 2));
+  ctx.beginPath();
+  ctx.moveTo(x + r, y);
+  ctx.lineTo(x + width - r, y);
+  ctx.quadraticCurveTo(x + width, y, x + width, y + r);
+  ctx.lineTo(x + width, y + height - r);
+  ctx.quadraticCurveTo(x + width, y + height, x + width - r, y + height);
+  ctx.lineTo(x + r, y + height);
+  ctx.quadraticCurveTo(x, y + height, x, y + height - r);
+  ctx.lineTo(x, y + r);
+  ctx.quadraticCurveTo(x, y, x + r, y);
+  ctx.closePath();
 };
 
 const getBlueprintBuffer = (width, height) => {
@@ -3615,6 +3840,8 @@ const setupCanvas = () => {
   hospitalCtx.setTransform(1, 0, 0, 1, 0, 0);
   hospitalCtx.scale(scale, scale);
   canvas.dataset.viewMode = viewMode;
+  elements.hospitalView?.setAttribute("data-view-mode", viewMode);
+  setupThreeCanvas();
   if (!canvas.dataset.zoomBound) {
     canvas.addEventListener("wheel", handleCanvasWheel, { passive: false });
     canvas.addEventListener("dblclick", handleCanvasDoubleClick);
@@ -3630,6 +3857,7 @@ const setupCanvas = () => {
     canvas.dataset.zoomBound = "true";
   }
   invalidateCanvasCache();
+  updateThreeSceneActivation();
   updateShowcaseZoomIndicator();
 };
 
@@ -6045,6 +6273,11 @@ const renderShowcaseCanvas = (ctx) => {
   const height = getGridHeight() * CANVAS_CELL;
   ctx.clearRect(0, 0, width, height);
 
+  if (isThreeSceneActive) {
+    drawPatientQueue(ctx);
+    return;
+  }
+
   const { pulse, wave, time } = showcaseAnimation;
 
   ctx.save();
@@ -6145,6 +6378,10 @@ const renderShowcaseCanvas = (ctx) => {
 };
 
 const renderHospitalCanvas = () => {
+  const shouldRenderThree = viewMode === "showcase" && isThreeSceneActive;
+  if (shouldRenderThree) {
+    updateThreeScene();
+  }
   if (!hospitalCtx) return;
   if (viewMode === "showcase") {
     renderShowcaseCanvas(hospitalCtx);
@@ -6156,6 +6393,9 @@ const renderHospitalCanvas = () => {
 const updateViewModeButtons = () => {
   if (elements.hospitalCanvas) {
     elements.hospitalCanvas.setAttribute("data-view-mode", viewMode);
+  }
+  if (elements.hospitalView) {
+    elements.hospitalView.setAttribute("data-view-mode", viewMode);
   }
   elements.viewButtons?.forEach((button) => {
     const isActive = button.dataset.viewMode === viewMode;
@@ -6182,6 +6422,10 @@ const setViewMode = (mode, { persist = true } = {}) => {
       // ignore storage failures silently
     }
   }
+  if (viewMode === "showcase") {
+    setupThreeCanvas();
+  }
+  updateThreeSceneActivation();
   updateViewModeButtons();
   updateShowcaseZoomIndicator();
   renderHospitalCanvas();
@@ -8796,6 +9040,9 @@ const establishStartingRoom = ({
     id: `room-${type}-${Math.random().toString(36).slice(2, 8)}`,
     type,
     name: blueprint.name,
+    roleRequired: Array.isArray(blueprint.roleRequired)
+      ? [...blueprint.roleRequired]
+      : [],
     sizeId: layout.id,
     interiorId: interior,
     machines: [...normalizedMachines],
@@ -8805,8 +9052,14 @@ const establishStartingRoom = ({
     x,
     y,
     baseCost: blueprint.cost,
+    baseUpkeep: blueprint.upkeep,
     costInvested: preview.totalCost,
     upkeep: preview.upkeep,
+    reputationBoost: preview.reputationBoost ?? 0,
+    environmentBoost: preview.environmentBoost ?? 0,
+    welfareBoost: preview.welfareBoost ?? 0,
+    moraleBoost: preview.moraleBoost ?? 0,
+    severityBoost: preview.severityBoost ?? 0,
     severityCapacity: Math.max(
       0,
       Math.round((blueprint.baseSeverity ?? 0) + (preview.severityBoost ?? 0))
@@ -8832,6 +9085,69 @@ const establishStartingRoom = ({
 const seedBaseHospital = () => {
   if (!Array.isArray(state.shells) || !state.shells.length) {
     state.shells = deriveCampusShells();
+  }
+  if (!state.rooms.length) {
+    const atrium = getPropertyById("atrium");
+    if (atrium) {
+      const walkwayDepth = Math.max(2, Math.min(4, Math.round(atrium.height * 0.25)));
+      const frontRoomHeight = 3;
+      let frontRowY = atrium.y + atrium.height - walkwayDepth - frontRoomHeight;
+      frontRowY = Math.max(atrium.y + 1, frontRowY);
+      const backRoomHeight = 3;
+      let backRowY = frontRowY - backRoomHeight - 1;
+      backRowY = Math.max(atrium.y + 1, backRowY);
+      const walkwaySpacing = 1;
+
+      const positionRow = (rooms, startY) => {
+        const totalWidth = rooms.reduce(
+          (sum, room, index) => sum + room.width + (index > 0 ? walkwaySpacing : 0),
+          0
+        );
+        const minStart = atrium.x + 1;
+        const maxStart = Math.max(minStart, atrium.x + atrium.width - totalWidth);
+        const desiredStart = atrium.x + Math.floor((atrium.width - totalWidth) / 2);
+        const startX = clamp(desiredStart, minStart, maxStart);
+        let cursor = startX;
+        return rooms.map((room, index) => {
+          const placement = {
+            ...room,
+            x: cursor,
+            y: startY,
+          };
+          cursor += room.width;
+          if (index < rooms.length - 1) {
+            cursor += walkwaySpacing;
+          }
+          return placement;
+        });
+      };
+
+      const frontRow = positionRow(
+        [
+          { type: "triage", width: 3, height: 3, interiorId: "sterile" },
+          { type: "reception", width: 4, height: 3, interiorId: "modern" },
+          { type: "gp", width: 3, height: 3, interiorId: "sterile" },
+        ],
+        frontRowY
+      );
+
+      const backRow = positionRow(
+        [
+          { type: "staffroom", width: 3, height: 3, interiorId: "soothing" },
+          { type: "pharmacy", width: 4, height: 3, interiorId: "modern" },
+          { type: "ward", width: 4, height: 3, interiorId: "nature" },
+        ],
+        backRowY
+      );
+
+      const seededRooms = [...frontRow, ...backRow]
+        .map((config) => establishStartingRoom(config))
+        .filter(Boolean);
+
+      if (seededRooms.length) {
+        markDepartmentsDirty();
+      }
+    }
   }
   if (state.rooms.length) {
     state.rooms.forEach((room) => occupyRoomFootprint(room));
