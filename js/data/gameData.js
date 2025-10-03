@@ -141,7 +141,7 @@ export const marketingCampaigns = [
   {
     id: "investors",
     name: "Investor Showcase",
-    desc: "Gain an instant ¤6000 infusion but scrutiny lowers reputation if morale drops.",
+    desc: "Gain an instant US$6,000 infusion but scrutiny lowers reputation if morale drops.",
     cost: 2500,
     duration: 1,
   },

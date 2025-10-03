@@ -3,6 +3,7 @@ export const MIN_CAMPUS_HEIGHT_UNITS = 24;
 export const CAMPUS_PADDING_UNITS_X = 6;
 export const CAMPUS_PADDING_UNITS_Y = 4;
 export const STARTING_CASH = 150000;
+export const CURRENCY_SYMBOL = "US$";
 export const DAY_TICKS = 60;
 export const CANVAS_CELL = 56;
 export const AXIS_LETTERS = "ABCDEFGHIJKLMNOPQRSTUVWXYZ";
