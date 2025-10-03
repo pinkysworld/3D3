@@ -2260,6 +2260,7 @@ progress::-moz-progress-bar {
     inset 0 0 32px rgba(30, 64, 175, 0.2);
   align-self: center;
   position: relative;
+  z-index: 1;
   overflow: hidden;
   isolation: isolate;
   transform-origin: center center;
@@ -2268,6 +2269,18 @@ progress::-moz-progress-bar {
   image-rendering: optimizeQuality;
   backface-visibility: hidden;
   will-change: transform, filter;
+}
+
+#hospital-canvas.uses-three {
+  background: transparent !important;
+  box-shadow:
+    0 24px 48px rgba(8, 47, 73, 0.45),
+    inset 0 0 32px rgba(30, 64, 175, 0.2);
+  pointer-events: none;
+}
+
+#hospital-canvas.uses-three::after {
+  display: none;
 }
 
 #hospital-canvas::after {
@@ -3080,3 +3093,31 @@ progress::-moz-progress-bar {
   text-decoration: line-through;
   color: var(--accent-muted);
 }
+#hospital-3d-canvas,
+#hospital-canvas {
+  width: 100%;
+  height: auto;
+}
+
+.hospital-view {
+  position: relative;
+  width: 100%;
+  max-width: 860px;
+  align-self: center;
+}
+
+#hospital-3d-canvas {
+  position: absolute;
+  inset: 0;
+  border-radius: 1rem;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.4s ease;
+  z-index: 0;
+}
+
+.hospital-view[data-view-mode="showcase"] #hospital-3d-canvas {
+  opacity: 1;
+  pointer-events: auto;
+}
+

@@ -396,12 +396,20 @@
           </div>
           <div id="live-build-rooms" class="live-build-palette" role="radiogroup" aria-label="Room blueprints"></div>
         </div>
-        <canvas
-          id="hospital-canvas"
-          width="672"
-          height="448"
-          aria-label="Hospital rendered floorplan"
-        ></canvas>
+        <div class="hospital-view" data-view-mode="showcase">
+          <canvas
+            id="hospital-3d-canvas"
+            width="672"
+            height="448"
+            aria-hidden="true"
+          ></canvas>
+          <canvas
+            id="hospital-canvas"
+            width="672"
+            height="448"
+            aria-label="Hospital rendered floorplan"
+          ></canvas>
+        </div>
         <aside id="patient-detail" class="patient-detail" aria-live="polite" hidden>
           <header class="patient-detail__header">
             <div>
