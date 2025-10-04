@@ -65,12 +65,21 @@ header {
   backdrop-filter: blur(10px);
   padding: 1.25rem 2rem;
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 1.5rem;
   box-shadow: 0 8px 24px rgba(15, 15, 15, 0.3);
   position: sticky;
   top: 0;
   z-index: 10;
+}
+
+.header-title {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  min-width: 240px;
 }
 
 header h1 {
@@ -84,18 +93,59 @@ header h1 {
   text-shadow: 0 8px 24px rgba(14, 116, 144, 0.35);
 }
 
+.header-subtitle {
+  margin: 0;
+  font-size: 0.9rem;
+  color: rgba(203, 213, 225, 0.85);
+  max-width: 32rem;
+}
+
+.header-controls {
+  display: flex;
+  align-items: center;
+  gap: 1.5rem;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
 header .stats {
   display: flex;
   flex-wrap: wrap;
-  gap: 1.5rem;
+  gap: 1.25rem;
   row-gap: 0.5rem;
   font-size: 0.95rem;
+}
+
+.focus-toggle {
+  border: none;
+  background: linear-gradient(120deg, rgba(56, 189, 248, 0.85), rgba(16, 185, 129, 0.85));
+  color: #0f172a;
+  border-radius: 999px;
+  padding: 0.55rem 1.3rem;
+  font-size: 0.85rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  cursor: pointer;
+  transition: transform 0.2s ease, box-shadow 0.2s ease;
+  box-shadow: 0 10px 20px rgba(56, 189, 248, 0.2);
+}
+
+.focus-toggle:hover,
+.focus-toggle:focus {
+  transform: translateY(-1px);
+  box-shadow: 0 16px 28px rgba(56, 189, 248, 0.3);
+}
+
+body.focus-mode .focus-toggle {
+  background: linear-gradient(120deg, rgba(248, 113, 113, 0.85), rgba(251, 146, 60, 0.85));
+  box-shadow: 0 10px 20px rgba(251, 146, 60, 0.25);
 }
 
 main {
   flex: 1;
   display: grid;
-  grid-template-columns: 220px minmax(0, 1fr) 320px;
+  grid-template-columns: 248px minmax(0, 1.6fr) 300px;
   grid-template-rows: auto 1fr;
   grid-template-areas:
     "menu playfield operations"
@@ -103,6 +153,27 @@ main {
   gap: 1.5rem;
   padding: 1.5rem 2rem 2rem;
   align-items: start;
+}
+
+body.focus-mode main {
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-rows: 1fr;
+  grid-template-areas: "playfield";
+  padding-left: clamp(1rem, 5vw, 3rem);
+  padding-right: clamp(1rem, 5vw, 3rem);
+}
+
+body.focus-mode .menu-rail,
+body.focus-mode .tab-content,
+body.focus-mode .sidebar.secondary {
+  display: none !important;
+}
+
+body.focus-mode .playfield {
+  grid-area: playfield;
+  margin: 0 auto;
+  width: 100%;
+  max-width: 1200px;
 }
 
 .menu-rail {
@@ -126,7 +197,7 @@ main {
   border-radius: 1rem;
   display: flex;
   flex-direction: column;
-  gap: 1.5rem;
+  gap: 1rem;
   padding: 1.25rem 1rem;
   box-shadow: inset 0 0 0 1px rgba(148, 163, 184, 0.08);
   position: sticky;
@@ -136,17 +207,83 @@ main {
 }
 
 .menu-block {
+  border-radius: 0.9rem;
+  border: 1px solid rgba(148, 163, 184, 0.12);
+  background: rgba(15, 23, 42, 0.45);
+  transition: border-color 0.25s ease, background 0.25s ease;
+}
+
+.menu-block[open] {
+  background: rgba(15, 23, 42, 0.7);
+  border-color: rgba(148, 163, 184, 0.22);
+}
+
+.menu-summary {
+  list-style: none;
   display: flex;
-  flex-direction: column;
+  align-items: center;
+  justify-content: space-between;
   gap: 0.75rem;
+  padding: 0.55rem 0.85rem;
+  cursor: pointer;
+  border-radius: 0.85rem;
+  color: rgba(148, 163, 184, 0.95);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  font-size: 0.75rem;
+  user-select: none;
+}
+
+.menu-summary::-webkit-details-marker {
+  display: none;
+}
+
+.menu-block[open] > .menu-summary {
+  color: rgba(248, 250, 252, 0.92);
+  background: linear-gradient(115deg, rgba(59, 130, 246, 0.18), rgba(139, 92, 246, 0.18));
 }
 
 .menu-heading {
-  font-size: 1rem;
-  letter-spacing: 0.05em;
-  text-transform: uppercase;
-  color: var(--text-muted);
+  font-size: 0.95rem;
   margin: 0;
+}
+
+.menu-chevron {
+  width: 0.6rem;
+  height: 0.6rem;
+  border-right: 2px solid currentColor;
+  border-bottom: 2px solid currentColor;
+  transform: rotate(45deg);
+  transition: transform 0.2s ease;
+}
+
+.menu-block[open] .menu-chevron {
+  transform: rotate(-135deg);
+}
+
+.menu-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 1.1rem;
+  padding: 0.65rem 0.85rem 0.9rem;
+}
+
+.menu-block:not([open]) > .menu-panel {
+  display: none;
+}
+
+.menu-subsection {
+  display: flex;
+  flex-direction: column;
+  gap: 0.55rem;
+}
+
+.menu-subheading {
+  margin: 0;
+  font-size: 0.72rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: rgba(148, 163, 184, 0.85);
 }
 
 .menu-options {
@@ -166,6 +303,32 @@ main {
   text-align: left;
   cursor: pointer;
   transition: background 0.25s ease, transform 0.2s ease;
+}
+
+.menu-option--sub {
+  font-weight: 500;
+  font-size: 0.8rem;
+  padding-left: 1.75rem;
+  background: rgba(15, 23, 42, 0.3);
+  position: relative;
+}
+
+.menu-option--sub::before {
+  content: "";
+  position: absolute;
+  width: 0.35rem;
+  height: 0.35rem;
+  border-radius: 50%;
+  background: currentColor;
+  left: 0.95rem;
+  top: 50%;
+  transform: translateY(-50%);
+  opacity: 0.7;
+}
+
+.menu-option--sub:hover,
+.menu-option--sub:focus {
+  transform: translateX(4px);
 }
 
 .menu-option[aria-pressed] {
@@ -189,6 +352,11 @@ main {
 .menu-option.active {
   background: var(--accent);
   color: #111827;
+}
+
+.menu-option--sub.active {
+  background: rgba(251, 191, 36, 0.25);
+  color: #1e293b;
 }
 
 .sidebar {
@@ -2492,6 +2660,10 @@ progress::-moz-progress-bar {
   text-align: right;
 }
 
+body.focus-mode .hospital-view-hint {
+  display: none;
+}
+
 .save-menu {
   position: fixed;
   inset: 0;
@@ -3121,3 +3293,42 @@ progress::-moz-progress-bar {
   pointer-events: auto;
 }
 
+@media (max-width: 1280px) {
+  main {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: auto auto auto auto;
+    grid-template-areas:
+      "menu"
+      "playfield"
+      "controls"
+      "operations";
+  }
+
+  .menu-rail,
+  .sidebar.secondary {
+    position: relative;
+    top: auto;
+    max-height: none;
+  }
+
+  .tab-content {
+    position: relative;
+  }
+}
+
+@media (max-width: 960px) {
+  header {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+
+  .header-controls {
+    width: 100%;
+    justify-content: space-between;
+  }
+
+  header .stats {
+    justify-content: space-between;
+    width: 100%;
+  }
+}

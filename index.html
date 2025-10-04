@@ -9,198 +9,285 @@
 <body>
   <div id="app">
     <header>
-      <h1>Pulse Point Hospital</h1>
-      <div class="stats">
-        <div>Day <span id="stat-day">1</span></div>
-        <div>Cash <span id="stat-cash">US$150,000</span></div>
-        <div>Reputation <span id="stat-reputation">50</span></div>
-        <div>Patients Treated <span id="stat-treated">0</span></div>
-        <div>Environment <span id="stat-environment">55</span></div>
-        <div>Patient Welfare <span id="stat-welfare">55</span></div>
+      <div class="header-title">
+        <h1>Pulse Point Hospital</h1>
+        <p class="header-subtitle">Design, direct, and keep the campus thriving.</p>
+      </div>
+      <div class="header-controls">
+        <div class="stats">
+          <div>Day <span id="stat-day">1</span></div>
+          <div>Cash <span id="stat-cash">US$150,000</span></div>
+          <div>Reputation <span id="stat-reputation">50</span></div>
+          <div>Patients Treated <span id="stat-treated">0</span></div>
+          <div>Environment <span id="stat-environment">55</span></div>
+          <div>Patient Welfare <span id="stat-welfare">55</span></div>
+        </div>
+        <button
+          id="toggle-focus-mode"
+          class="focus-toggle"
+          type="button"
+          aria-pressed="false"
+        >
+          Enter Focus Mode
+        </button>
       </div>
     </header>
 
     <main>
       <aside class="menu-rail" aria-label="Primary navigation">
-        <div class="menu-block">
-          <h2 class="menu-heading">Functions</h2>
-          <nav class="tabs" role="tablist">
-            <button class="tab-button active" data-tab="overview" role="tab">Overview</button>
-            <button class="tab-button" data-tab="build" role="tab">Build</button>
-            <button class="tab-button" data-tab="staff" role="tab">Staff</button>
-            <button class="tab-button" data-tab="research" role="tab">Research</button>
-            <button class="tab-button" data-tab="marketing" role="tab">Marketing</button>
-            <button class="tab-button" data-tab="departments" role="tab">Departments</button>
-          </nav>
-        </div>
-        <div class="menu-block">
-          <h2 class="menu-heading">Options</h2>
-          <div class="menu-options" role="list">
-            <button
-              class="menu-option"
-              role="listitem"
-              data-tab-target="overview"
-              data-panel="#panel-policies"
-            >
-              Hospital Policies
-            </button>
-            <button
-              class="menu-option"
-              role="listitem"
-              data-tab-target="overview"
-              data-panel="#panel-finance"
-            >
-              Finance &amp; Loans
-            </button>
-            <button
-              class="menu-option"
-              role="listitem"
-              data-tab-target="build"
-              data-panel="#panel-grounds"
-            >
-              Ground Expansion
-            </button>
-            <button
-              class="menu-option"
-              role="listitem"
-              data-tab-target="build"
-              data-panel="#panel-designer"
-            >
-              Room Designer
-            </button>
-            <button
-              class="menu-option"
-              role="listitem"
-              data-tab-target="build"
-              data-panel="#panel-room-management"
-            >
-              Room Management
-            </button>
-            <button
-              class="menu-option"
-              role="listitem"
-              data-tab-target="staff"
-              data-panel="#panel-staff-hire"
-            >
-              Staff Hiring
-            </button>
-            <button
-              class="menu-option"
-              role="listitem"
-              data-tab-target="staff"
-              data-panel="#panel-staff-roster"
-            >
-              Staff Roster
-            </button>
-            <button
-              class="menu-option"
-              role="listitem"
-              data-tab-target="research"
-              data-panel="#tab-research"
-            >
-              Research Projects
-            </button>
-            <button
-              class="menu-option"
-              role="listitem"
-              data-tab-target="marketing"
-              data-panel="#tab-marketing"
-            >
-              Marketing Campaigns
-            </button>
+        <details class="menu-block" open>
+          <summary class="menu-summary">
+            <span class="menu-heading">Functions</span>
+            <span class="menu-chevron" aria-hidden="true"></span>
+          </summary>
+          <div class="menu-panel">
+            <nav class="tabs" role="tablist">
+              <button class="tab-button active" data-tab="overview" role="tab">Overview</button>
+              <button class="tab-button" data-tab="build" role="tab">Build</button>
+              <button class="tab-button" data-tab="staff" role="tab">Staff</button>
+              <button class="tab-button" data-tab="research" role="tab">Research</button>
+              <button class="tab-button" data-tab="marketing" role="tab">Marketing</button>
+              <button class="tab-button" data-tab="departments" role="tab">Departments</button>
+            </nav>
           </div>
-        </div>
-        <div class="menu-block">
-          <h2 class="menu-heading">Departments</h2>
-          <div class="menu-options" role="list">
-            <button
-              class="menu-option"
-              role="listitem"
-              data-tab-target="departments"
-              data-panel="#department-detail"
-              data-department-target="marketing"
-            >
-              Marketing Department
-            </button>
-            <button
-              class="menu-option"
-              role="listitem"
-              data-tab-target="departments"
-              data-panel="#department-detail"
-              data-department-target="debt"
-            >
-              Debt &amp; Receivables
-            </button>
-            <button
-              class="menu-option"
-              role="listitem"
-              data-tab-target="departments"
-              data-panel="#department-detail"
-              data-department-target="emergency"
-            >
-              Emergency Medicine
-            </button>
-            <button
-              class="menu-option"
-              role="listitem"
-              data-tab-target="departments"
-              data-panel="#department-detail"
-              data-department-target="radiology"
-            >
-              Radiology &amp; Diagnostics
-            </button>
-            <button
-              class="menu-option"
-              role="listitem"
-              data-tab-target="departments"
-              data-panel="#department-detail"
-              data-department-target="surgery"
-            >
-              Surgical Services
-            </button>
-            <button
-              class="menu-option"
-              role="listitem"
-              data-tab-target="departments"
-              data-panel="#department-detail"
-              data-department-target="wellness"
-            >
-              Family &amp; Wellness
-            </button>
+        </details>
+        <details class="menu-block" open>
+          <summary class="menu-summary">
+            <span class="menu-heading">Options</span>
+            <span class="menu-chevron" aria-hidden="true"></span>
+          </summary>
+          <div class="menu-panel">
+            <div class="menu-subsection">
+              <h3 class="menu-subheading">Overview</h3>
+              <div class="menu-options" role="list">
+                <button
+                  class="menu-option"
+                  role="listitem"
+                  data-tab-target="overview"
+                  data-panel="#panel-policies"
+                >
+                  Hospital Policies
+                </button>
+                <button
+                  class="menu-option"
+                  role="listitem"
+                  data-tab-target="overview"
+                  data-panel="#panel-finance"
+                >
+                  Finance &amp; Loans
+                </button>
+              </div>
+            </div>
+            <div class="menu-subsection">
+              <h3 class="menu-subheading">Build</h3>
+              <div class="menu-options" role="list">
+                <button
+                  class="menu-option"
+                  role="listitem"
+                  data-tab-target="build"
+                  data-panel="#panel-grounds"
+                >
+                  Ground Expansion
+                </button>
+                <button
+                  class="menu-option"
+                  role="listitem"
+                  data-tab-target="build"
+                  data-panel="#panel-designer"
+                >
+                  Room Designer
+                </button>
+                <button
+                  class="menu-option"
+                  role="listitem"
+                  data-tab-target="build"
+                  data-panel="#panel-room-management"
+                >
+                  Room Management
+                </button>
+                <button
+                  class="menu-option menu-option--sub"
+                  role="listitem"
+                  data-tab-target="build"
+                  data-build-tab-target="rooms"
+                  data-panel="#build-menu-rooms"
+                >
+                  Room Blueprints
+                </button>
+                <button
+                  class="menu-option menu-option--sub"
+                  role="listitem"
+                  data-tab-target="build"
+                  data-build-tab-target="structure"
+                  data-panel="#build-menu-structure"
+                >
+                  Structure Library
+                </button>
+                <button
+                  class="menu-option menu-option--sub"
+                  role="listitem"
+                  data-tab-target="build"
+                  data-build-tab-target="interiors"
+                  data-panel="#build-menu-interiors"
+                >
+                  Interior Themes
+                </button>
+                <button
+                  class="menu-option menu-option--sub"
+                  role="listitem"
+                  data-tab-target="build"
+                  data-build-tab-target="amenities"
+                  data-panel="#build-menu-amenities"
+                >
+                  Amenities &amp; Decor
+                </button>
+              </div>
+            </div>
+            <div class="menu-subsection">
+              <h3 class="menu-subheading">Staff</h3>
+              <div class="menu-options" role="list">
+                <button
+                  class="menu-option"
+                  role="listitem"
+                  data-tab-target="staff"
+                  data-panel="#panel-staff-hire"
+                >
+                  Staff Hiring
+                </button>
+                <button
+                  class="menu-option"
+                  role="listitem"
+                  data-tab-target="staff"
+                  data-panel="#panel-staff-roster"
+                >
+                  Staff Roster
+                </button>
+              </div>
+            </div>
+            <div class="menu-subsection">
+              <h3 class="menu-subheading">Strategy</h3>
+              <div class="menu-options" role="list">
+                <button
+                  class="menu-option"
+                  role="listitem"
+                  data-tab-target="research"
+                  data-panel="#tab-research"
+                >
+                  Research Projects
+                </button>
+                <button
+                  class="menu-option"
+                  role="listitem"
+                  data-tab-target="marketing"
+                  data-panel="#tab-marketing"
+                >
+                  Marketing Campaigns
+                </button>
+              </div>
+            </div>
           </div>
-        </div>
-        <div class="menu-block">
-          <h2 class="menu-heading">Game</h2>
-          <div class="menu-options">
-            <button
-              class="menu-option"
-              data-modal="save"
-              data-tab-target="*"
-              id="open-save-menu"
-              type="button"
-            >
-              Save &amp; Load
-            </button>
-            <button
-              class="menu-option"
-              id="toggle-music"
-              type="button"
-              aria-pressed="true"
-              data-audio-toggle
-            >
-              Music: On
-            </button>
-            <button
-              class="menu-option"
-              id="toggle-sfx"
-              type="button"
-              aria-pressed="true"
-              data-audio-toggle
-            >
-              Sound Effects: On
-            </button>
+        </details>
+        <details class="menu-block" open>
+          <summary class="menu-summary">
+            <span class="menu-heading">Departments</span>
+            <span class="menu-chevron" aria-hidden="true"></span>
+          </summary>
+          <div class="menu-panel">
+            <div class="menu-options" role="list">
+              <button
+                class="menu-option"
+                role="listitem"
+                data-tab-target="departments"
+                data-panel="#department-detail"
+                data-department-target="marketing"
+              >
+                Marketing Department
+              </button>
+              <button
+                class="menu-option"
+                role="listitem"
+                data-tab-target="departments"
+                data-panel="#department-detail"
+                data-department-target="debt"
+              >
+                Debt &amp; Receivables
+              </button>
+              <button
+                class="menu-option"
+                role="listitem"
+                data-tab-target="departments"
+                data-panel="#department-detail"
+                data-department-target="emergency"
+              >
+                Emergency Medicine
+              </button>
+              <button
+                class="menu-option"
+                role="listitem"
+                data-tab-target="departments"
+                data-panel="#department-detail"
+                data-department-target="radiology"
+              >
+                Radiology &amp; Diagnostics
+              </button>
+              <button
+                class="menu-option"
+                role="listitem"
+                data-tab-target="departments"
+                data-panel="#department-detail"
+                data-department-target="surgery"
+              >
+                Surgical Services
+              </button>
+              <button
+                class="menu-option"
+                role="listitem"
+                data-tab-target="departments"
+                data-panel="#department-detail"
+                data-department-target="wellness"
+              >
+                Family &amp; Wellness
+              </button>
+            </div>
           </div>
-        </div>
+        </details>
+        <details class="menu-block" open>
+          <summary class="menu-summary">
+            <span class="menu-heading">Game</span>
+            <span class="menu-chevron" aria-hidden="true"></span>
+          </summary>
+          <div class="menu-panel">
+            <div class="menu-options">
+              <button
+                class="menu-option"
+                data-modal="save"
+                data-tab-target="*"
+                id="open-save-menu"
+                type="button"
+              >
+                Save &amp; Load
+              </button>
+              <button
+                class="menu-option"
+                id="toggle-music"
+                type="button"
+                aria-pressed="true"
+                data-audio-toggle
+              >
+                Music: On
+              </button>
+              <button
+                class="menu-option"
+                id="toggle-sfx"
+                type="button"
+                aria-pressed="true"
+                data-audio-toggle
+              >
+                Sound Effects: On
+              </button>
+            </div>
+          </div>
+        </details>
       </aside>
 
       <section class="sidebar tab-content" aria-label="Game controls">
