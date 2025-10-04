@@ -219,10 +219,32 @@ const createShellForParcel = (parcel) => {
 
 const deriveCampusShells = () => {
   const atrium = getPropertyById("atrium");
+  const gardens = getPropertyById("gardens");
+
+  if (
+    atrium?.owned &&
+    gardens?.owned &&
+    atrium.x === gardens.x &&
+    atrium.width === gardens.width &&
+    (atrium.y + atrium.height === gardens.y || gardens.y + gardens.height === atrium.y)
+  ) {
+    const [top, bottom] = atrium.y <= gardens.y ? [atrium, gardens] : [gardens, atrium];
+    const combinedParcel = {
+      id: "starter-campus",
+      x: top.x,
+      y: top.y,
+      width: top.width,
+      height: top.height + bottom.height,
+    };
+    const shell = createShellForParcel(combinedParcel);
+    if (shell) return [shell];
+  }
+
   if (atrium?.owned) {
     const shell = createShellForParcel(atrium);
     return shell ? [shell] : [];
   }
+
   const fallback = getOwnedProperties()[0];
   const shell = createShellForParcel(fallback);
   return shell ? [shell] : [];
@@ -382,6 +404,7 @@ const elements = {
     reset: document.querySelector("#reset-hospital-zoom"),
   },
   viewHint: document.querySelector("#hospital-view-hint"),
+  focusToggle: document.querySelector("#toggle-focus-mode"),
   statDay: document.querySelector("#stat-day"),
   statCash: document.querySelector("#stat-cash"),
   statReputation: document.querySelector("#stat-reputation"),
@@ -469,6 +492,14 @@ const elements = {
 const menuOptions = Array.from(
   document.querySelectorAll(".menu-option:not([data-modal]):not([data-audio-toggle])")
 );
+
+const menuSubsections = Array.from(document.querySelectorAll(".menu-subsection"));
+
+const focusModeHiddenSelectors = [
+  ".menu-rail",
+  ".tab-content",
+  ".sidebar.secondary",
+];
 
 const renderEngine = createRenderEngine({ tileSize: CANVAS_CELL });
 let threeRenderer = null;
@@ -10049,10 +10080,59 @@ const highlightPanel = (selector) => {
   }, 1200);
 };
 
+const setFocusModeEnabled = (enabled) => {
+  document.body.classList.toggle("focus-mode", enabled);
+  const toggle = elements.focusToggle;
+  if (toggle) {
+    toggle.setAttribute("aria-pressed", enabled ? "true" : "false");
+    toggle.textContent = enabled ? "Exit Focus Mode" : "Enter Focus Mode";
+  }
+  focusModeHiddenSelectors.forEach((selector) => {
+    document.querySelectorAll(selector).forEach((panel) => {
+      if (enabled) {
+        panel.setAttribute("aria-hidden", "true");
+      } else {
+        panel.removeAttribute("aria-hidden");
+      }
+    });
+  });
+  if (enabled) {
+    const canvas = elements.hospitalCanvas ?? elements.hospitalCanvas3D;
+    if (canvas) {
+      if (!canvas.hasAttribute("tabindex")) {
+        canvas.setAttribute("tabindex", "-1");
+      }
+      try {
+        canvas.focus({ preventScroll: true });
+      } catch (error) {
+        canvas.focus();
+      }
+    }
+  }
+};
+
+const setupFocusModeToggle = () => {
+  const toggle = elements.focusToggle;
+  if (!toggle) {
+    return;
+  }
+  setFocusModeEnabled(false);
+  toggle.addEventListener("click", () => {
+    const nextState = !document.body.classList.contains("focus-mode");
+    setFocusModeEnabled(nextState);
+  });
+  document.addEventListener("keydown", (event) => {
+    if (event.key === "Escape" && document.body.classList.contains("focus-mode")) {
+      setFocusModeEnabled(false);
+    }
+  });
+};
+
 const updateMenuOptions = (activeTab) => {
   let hasActiveOption = false;
   menuOptions.forEach((option) => {
-    const shouldShow = option.dataset.tabTarget === activeTab;
+    const target = option.dataset.tabTarget;
+    const shouldShow = target === activeTab || target === "*";
     option.toggleAttribute("hidden", !shouldShow);
     if (!shouldShow) {
       option.classList.remove("active");
@@ -10060,24 +10140,35 @@ const updateMenuOptions = (activeTab) => {
       hasActiveOption = true;
     }
   });
+  menuSubsections.forEach((section) => {
+    const hasVisibleChild = Array.from(section.querySelectorAll(".menu-option")).some(
+      (option) => !option.hasAttribute("hidden")
+    );
+    section.toggleAttribute("hidden", !hasVisibleChild);
+  });
   if (!hasActiveOption) {
     const firstVisible = menuOptions.find((option) => !option.hasAttribute("hidden"));
     if (firstVisible) {
       firstVisible.classList.add("active");
     }
   }
+  const activeOption = menuOptions.find(
+    (option) => option.classList.contains("active") && !option.hasAttribute("hidden")
+  );
+  activeOption?.closest("details")?.setAttribute("open", "");
 };
 
 const setupMenuRail = () => {
   menuOptions.forEach((option) => {
     option.addEventListener("click", () => {
+      option.closest("details")?.setAttribute("open", "");
       const targetTab = option.dataset.tabTarget;
       const panelSelector = option.dataset.panel;
       if (targetTab) {
         const targetButton = document.querySelector(`.tab-button[data-tab="${targetTab}"]`);
         if (targetButton && !targetButton.classList.contains("active")) {
           targetButton.click();
-        } else if (targetButton) {
+        } else if (targetButton && targetTab !== "*") {
           updateMenuOptions(targetTab);
         }
       }
@@ -10088,6 +10179,10 @@ const setupMenuRail = () => {
         selectedDepartmentId = departmentTarget;
         markDepartmentsDirty();
         renderDepartments();
+      }
+      const buildTabTarget = option.dataset.buildTabTarget;
+      if (buildTabTarget) {
+        setBuildMenuTab(buildTabTarget);
       }
       if (panelSelector) {
         setTimeout(() => highlightPanel(panelSelector), 150);
@@ -10217,6 +10312,7 @@ const init = () => {
   renderPropertyMarket();
   setupTabs();
   setupMenuRail();
+  setupFocusModeToggle();
   setupDepartmentControls();
   setupAudioControls();
   refreshCandidates();
