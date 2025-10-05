@@ -10,6 +10,8 @@ const createFallbackRenderer = () => ({
   resetCamera() {},
   rotate() {},
   zoomBy() {},
+  move() {},
+  elevate() {},
   dispose() {},
 });
 
@@ -127,6 +129,8 @@ export const createThreeSceneRenderer = ({ canvas, pixelRatio = window.devicePix
     root.add(shellGroup);
     root.add(roomGroup);
     root.add(agentGroup);
+
+    const roomInstances = [];
 
     const ambient = new THREE.AmbientLight(0x96b6ff, 0.55);
     scene.add(ambient);
@@ -473,6 +477,15 @@ export const createThreeSceneRenderer = ({ canvas, pixelRatio = window.devicePix
       });
     };
 
+    const WORLD_UP = new THREE.Vector3(0, 1, 0);
+    const moveVector = new THREE.Vector3();
+    const forwardVector = new THREE.Vector3();
+    const rightVector = new THREE.Vector3();
+    const cameraToRoom = new THREE.Vector3();
+    const cameraHorizontal = new THREE.Vector3();
+    const cameraForward = new THREE.Vector3();
+    const toRoomHorizontal = new THREE.Vector3();
+
     const createRoomGroup = (room) => {
       const group = new THREE.Group();
       const floorTexture = room.sprite
@@ -520,25 +533,35 @@ export const createThreeSceneRenderer = ({ canvas, pixelRatio = window.devicePix
         west: new THREE.BoxGeometry(wallThickness, wallHeight, room.height),
       };
 
-      const north = new THREE.Mesh(wallGeometries.north, wallMaterial.clone());
+      const createWallMesh = (geometry) => {
+        const mesh = new THREE.Mesh(geometry, wallMaterial.clone());
+        const material = mesh.material;
+        material.transparent = true;
+        material.opacity = 0.92;
+        material.depthWrite = false;
+        mesh.userData.baseOpacity = material.opacity;
+        return mesh;
+      };
+
+      const north = createWallMesh(wallGeometries.north);
       north.position.set(0, wallHeight / 2, -room.height / 2 + wallThickness / 2);
       north.castShadow = true;
       north.receiveShadow = true;
       group.add(north);
 
-      const south = new THREE.Mesh(wallGeometries.south, wallMaterial.clone());
+      const south = createWallMesh(wallGeometries.south);
       south.position.set(0, wallHeight / 2, room.height / 2 - wallThickness / 2);
       south.castShadow = true;
       south.receiveShadow = true;
       group.add(south);
 
-      const east = new THREE.Mesh(wallGeometries.east, wallMaterial.clone());
+      const east = createWallMesh(wallGeometries.east);
       east.position.set(room.width / 2 - wallThickness / 2, wallHeight / 2, 0);
       east.castShadow = true;
       east.receiveShadow = true;
       group.add(east);
 
-      const west = new THREE.Mesh(wallGeometries.west, wallMaterial.clone());
+      const west = createWallMesh(wallGeometries.west);
       west.position.set(-room.width / 2 + wallThickness / 2, wallHeight / 2, 0);
       west.castShadow = true;
       west.receiveShadow = true;
@@ -592,20 +615,143 @@ export const createThreeSceneRenderer = ({ canvas, pixelRatio = window.devicePix
 
       const world = toWorldPosition(room.x + room.width / 2, room.y + room.height / 2);
       group.position.set(world.x, 0, world.z);
-      return group;
+      const center = new THREE.Vector3(world.x, wallHeight / 2, world.z);
+      return {
+        group,
+        center,
+        width: Math.max(0.01, room.width),
+        depth: Math.max(0.01, room.height),
+        wallHeight,
+        walls: [
+          {
+            mesh: north,
+            normal: new THREE.Vector3(0, 0, -1),
+            interiorNormal: new THREE.Vector3(0, 0, 1),
+            baseOpacity: north.userData.baseOpacity,
+          },
+          {
+            mesh: south,
+            normal: new THREE.Vector3(0, 0, 1),
+            interiorNormal: new THREE.Vector3(0, 0, -1),
+            baseOpacity: south.userData.baseOpacity,
+          },
+          {
+            mesh: east,
+            normal: new THREE.Vector3(1, 0, 0),
+            interiorNormal: new THREE.Vector3(-1, 0, 0),
+            baseOpacity: east.userData.baseOpacity,
+          },
+          {
+            mesh: west,
+            normal: new THREE.Vector3(-1, 0, 0),
+            interiorNormal: new THREE.Vector3(1, 0, 0),
+            baseOpacity: west.userData.baseOpacity,
+          },
+        ],
+      };
     };
 
     const updateRooms = (rooms = []) => {
       clearGroup(roomGroup);
+      roomInstances.length = 0;
       rooms.forEach((room) => {
-        const roomMesh = createRoomGroup(room);
-        roomGroup.add(roomMesh);
+        const instance = createRoomGroup(room);
+        roomGroup.add(instance.group);
+        roomInstances.push(instance);
       });
     };
 
     const capsuleGeometry = new THREE.CapsuleGeometry(0.26, 0.82, 8, 16);
     const baseGeometry = new THREE.CylinderGeometry(0.34, 0.38, 0.1, 24);
     const ringGeometry = new THREE.TorusGeometry(0.52, 0.06, 8, 32);
+
+    const PATIENT_SKIN_TONES = [
+      "#f4d7c6",
+      "#e8b99c",
+      "#cf9471",
+      "#a97151",
+      "#7d5030",
+      "#593822",
+    ];
+    const PATIENT_HAIR_TONES = [
+      "#201712",
+      "#2f231b",
+      "#3b2c1e",
+      "#4f3824",
+      "#6d4b2d",
+      "#8a623a",
+      "#b98a58",
+      "#2d3748",
+    ];
+    const PATIENT_OUTFITS = [
+      { top: "#60a5fa", bottom: "#3b82f6", accent: "#bfdbfe" },
+      { top: "#34d399", bottom: "#059669", accent: "#bbf7d0" },
+      { top: "#f472b6", bottom: "#ec4899", accent: "#fbcfe8" },
+      { top: "#f59e0b", bottom: "#d97706", accent: "#fde68a" },
+      { top: "#a855f7", bottom: "#7c3aed", accent: "#ddd6fe" },
+      { top: "#f97316", bottom: "#ea580c", accent: "#fed7aa" },
+      { top: "#22d3ee", bottom: "#0ea5e9", accent: "#bae6fd" },
+      { top: "#facc15", bottom: "#eab308", accent: "#fef08a" },
+    ];
+
+    const createFaceSprite = ({
+      seed = 1,
+      eyeColor = "#0f172a",
+      browColor = "#1f2937",
+    } = {}) => {
+      const canvas = document.createElement("canvas");
+      canvas.width = 96;
+      canvas.height = 96;
+      const ctx = canvas.getContext("2d");
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+      ctx.fillStyle = eyeColor;
+      const eyeYOffset = (seed % 4) - 1.5;
+      const eyeSpread = 18;
+      const eyeRadius = 6.2;
+      ctx.beginPath();
+      ctx.arc(canvas.width / 2 - eyeSpread, canvas.height / 2 + eyeYOffset, eyeRadius, 0, Math.PI * 2);
+      ctx.arc(canvas.width / 2 + eyeSpread, canvas.height / 2 + eyeYOffset, eyeRadius, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.fillStyle = browColor;
+      ctx.lineCap = "round";
+      ctx.lineWidth = 5.5;
+      const browTilt = ((seed >> 2) % 5) * 0.06 - 0.12;
+      ctx.beginPath();
+      ctx.moveTo(canvas.width / 2 - eyeSpread - 10, canvas.height / 2 - 6);
+      ctx.lineTo(canvas.width / 2 - eyeSpread + 10, canvas.height / 2 - 10 - browTilt * 14);
+      ctx.stroke();
+      ctx.beginPath();
+      ctx.moveTo(canvas.width / 2 + eyeSpread - 10, canvas.height / 2 - 10 + browTilt * 14);
+      ctx.lineTo(canvas.width / 2 + eyeSpread + 10, canvas.height / 2 - 6);
+      ctx.stroke();
+      ctx.strokeStyle = eyeColor;
+      ctx.lineWidth = 4.5;
+      ctx.beginPath();
+      const expression = (seed >> 4) % 5;
+      if (expression === 0) {
+        ctx.arc(canvas.width / 2, canvas.height / 2 + 22, 14, Math.PI * 0.1, Math.PI - Math.PI * 0.1);
+      } else if (expression === 1) {
+        ctx.moveTo(canvas.width / 2 - 12, canvas.height / 2 + 26);
+        ctx.lineTo(canvas.width / 2 + 12, canvas.height / 2 + 26);
+      } else if (expression === 2) {
+        ctx.arc(canvas.width / 2, canvas.height / 2 + 28, 12, Math.PI * 0.95, Math.PI * 0.05, true);
+      } else {
+        ctx.moveTo(canvas.width / 2 - 14, canvas.height / 2 + 26);
+        ctx.quadraticCurveTo(canvas.width / 2, canvas.height / 2 + 34, canvas.width / 2 + 14, canvas.height / 2 + 26);
+        ctx.moveTo(canvas.width / 2 - 14, canvas.height / 2 + 26);
+        ctx.quadraticCurveTo(canvas.width / 2, canvas.height / 2 + 20, canvas.width / 2 + 14, canvas.height / 2 + 26);
+      }
+      ctx.stroke();
+      const texture = new THREE.CanvasTexture(canvas);
+      texture.colorSpace = THREE.SRGBColorSpace;
+      const material = new THREE.SpriteMaterial({ map: texture, transparent: true, depthWrite: false });
+      const sprite = new THREE.Sprite(material);
+      sprite.scale.set(0.46, 0.46, 1);
+      sprite.userData.dispose = () => {
+        texture.dispose();
+      };
+      return sprite;
+    };
 
     const createAgentGroup = (agent) => {
       const group = new THREE.Group();
@@ -619,17 +765,162 @@ export const createThreeSceneRenderer = ({ canvas, pixelRatio = window.devicePix
       baseMesh.receiveShadow = true;
       group.add(baseMesh);
 
-      const bodyMaterial = new THREE.MeshStandardMaterial({
-        color: new THREE.Color(agent.color ?? "#38bdf8"),
-        emissive: new THREE.Color(agent.accent ?? agent.color ?? "#38bdf8").multiplyScalar(0.25),
-        emissiveIntensity: agent.type === "patient" && agent.isEmergency ? 1.1 : 0.6,
-        metalness: 0.18,
-        roughness: 0.4,
-      });
-      const bodyMesh = new THREE.Mesh(capsuleGeometry, bodyMaterial);
-      bodyMesh.position.y = 0.95;
-      bodyMesh.castShadow = true;
-      group.add(bodyMesh);
+      if (agent.type === "patient") {
+        const seed = agent.id ?? Math.floor(Math.random() * 10_000);
+        const skinHex = PATIENT_SKIN_TONES[seed % PATIENT_SKIN_TONES.length];
+        const hairHex = PATIENT_HAIR_TONES[(seed >> 3) % PATIENT_HAIR_TONES.length];
+        const outfit = PATIENT_OUTFITS[(seed >> 5) % PATIENT_OUTFITS.length];
+        const topHex = agent.color ?? outfit.top;
+        const bottomHex = outfit.bottom ?? topHex;
+        const accentHex = outfit.accent ?? topHex;
+        const heightVariance = ((seed >> 7) % 5 - 2) * 0.05;
+        const legHeight = 0.86 + heightVariance * 0.4;
+        const torsoHeight = 0.96 + heightVariance * 0.5;
+        const hipHeight = 0.5 + heightVariance * 0.2;
+        const torsoY = hipHeight + torsoHeight / 2 + 0.04;
+        const headY = torsoY + torsoHeight / 2 + 0.28;
+
+        const pantsMaterial = new THREE.MeshStandardMaterial({
+          color: new THREE.Color(bottomHex),
+          roughness: 0.55,
+          metalness: 0.12,
+        });
+        const torsoMaterial = new THREE.MeshStandardMaterial({
+          color: new THREE.Color(topHex),
+          roughness: 0.48,
+          metalness: 0.14,
+        });
+        const trimMaterial = new THREE.MeshStandardMaterial({
+          color: new THREE.Color(accentHex),
+          emissive: agent.isEmergency ? new THREE.Color("#fda4af") : new THREE.Color(accentHex).multiplyScalar(0.2),
+          emissiveIntensity: agent.isEmergency ? 0.6 : 0.25,
+          roughness: 0.36,
+          metalness: 0.2,
+        });
+        const skinMaterial = new THREE.MeshStandardMaterial({
+          color: new THREE.Color(skinHex),
+          roughness: 0.68,
+          metalness: 0.04,
+        });
+        const hairMaterial = new THREE.MeshStandardMaterial({
+          color: new THREE.Color(hairHex),
+          roughness: 0.72,
+          metalness: 0.18,
+        });
+        const shoeMaterial = new THREE.MeshStandardMaterial({
+          color: new THREE.Color("#111827"),
+          roughness: 0.4,
+          metalness: 0.22,
+        });
+
+        const legOffset = 0.18;
+        const legTilt = ((seed >> 9) % 11 - 5) * 0.01;
+
+        const leftLegGeometry = new THREE.CylinderGeometry(0.18, 0.2, legHeight, 18, 1, true);
+        const leftLeg = new THREE.Mesh(leftLegGeometry, pantsMaterial);
+        leftLeg.position.set(-legOffset, hipHeight, 0.04);
+        leftLeg.rotation.z = legTilt;
+        leftLeg.castShadow = true;
+        group.add(leftLeg);
+
+        const rightLegGeometry = new THREE.CylinderGeometry(0.18, 0.2, legHeight, 18, 1, true);
+        const rightLeg = new THREE.Mesh(rightLegGeometry, pantsMaterial);
+        rightLeg.position.set(legOffset, hipHeight, -0.02);
+        rightLeg.rotation.z = -legTilt;
+        rightLeg.castShadow = true;
+        group.add(rightLeg);
+
+        const leftShoeGeometry = new THREE.BoxGeometry(0.26, 0.1, 0.46);
+        const leftShoe = new THREE.Mesh(leftShoeGeometry, shoeMaterial);
+        leftShoe.position.set(-legOffset, 0.12, 0.16);
+        leftShoe.castShadow = true;
+        group.add(leftShoe);
+        const rightShoeGeometry = new THREE.BoxGeometry(0.26, 0.1, 0.46);
+        const rightShoe = new THREE.Mesh(rightShoeGeometry, shoeMaterial);
+        rightShoe.position.set(legOffset, 0.12, 0.1);
+        rightShoe.castShadow = true;
+        group.add(rightShoe);
+
+        const torsoGeometry = new THREE.CylinderGeometry(0.32, 0.34, torsoHeight, 24, 1, true);
+        const torsoMesh = new THREE.Mesh(torsoGeometry, torsoMaterial);
+        torsoMesh.position.set(0, torsoY, 0);
+        torsoMesh.castShadow = true;
+        group.add(torsoMesh);
+
+        const accentGeometry = new THREE.BoxGeometry(0.58, 0.18, 0.42);
+        const accentMesh = new THREE.Mesh(accentGeometry, trimMaterial);
+        accentMesh.position.set(0, torsoY + torsoHeight * 0.18, 0.2);
+        accentMesh.castShadow = true;
+        group.add(accentMesh);
+
+        const sleeveMaterial = new THREE.MeshStandardMaterial({
+          color: new THREE.Color(topHex).multiplyScalar(0.92),
+          roughness: 0.5,
+          metalness: 0.12,
+        });
+        const armOffset = 0.44;
+        const armTilt = 0.28;
+
+        const leftArmGeometry = new THREE.CylinderGeometry(0.11, 0.12, 0.72 + heightVariance * 0.2, 16);
+        const leftArm = new THREE.Mesh(leftArmGeometry, sleeveMaterial);
+        leftArm.position.set(-armOffset, torsoY + torsoHeight * 0.05, 0);
+        leftArm.rotation.z = armTilt;
+        leftArm.castShadow = true;
+        group.add(leftArm);
+        const rightArmGeometry = new THREE.CylinderGeometry(0.11, 0.12, 0.72 + heightVariance * 0.2, 16);
+        const rightArm = new THREE.Mesh(rightArmGeometry, sleeveMaterial);
+        rightArm.position.set(armOffset, torsoY + torsoHeight * 0.05, 0);
+        rightArm.rotation.z = -armTilt;
+        rightArm.castShadow = true;
+        group.add(rightArm);
+
+        const leftHandGeometry = new THREE.SphereGeometry(0.14, 16, 16);
+        const leftHand = new THREE.Mesh(leftHandGeometry, skinMaterial);
+        leftHand.position.set(-armOffset - 0.02, torsoY - torsoHeight * 0.25, 0.04);
+        leftHand.castShadow = true;
+        group.add(leftHand);
+        const rightHandGeometry = new THREE.SphereGeometry(0.14, 16, 16);
+        const rightHand = new THREE.Mesh(rightHandGeometry, skinMaterial);
+        rightHand.position.set(armOffset + 0.02, torsoY - torsoHeight * 0.25, 0);
+        rightHand.castShadow = true;
+        group.add(rightHand);
+
+        const headGeometry = new THREE.SphereGeometry(0.26 + heightVariance * 0.03, 24, 24);
+        const headMesh = new THREE.Mesh(headGeometry, skinMaterial);
+        headMesh.position.set(0, headY, 0);
+        headMesh.castShadow = true;
+        group.add(headMesh);
+
+        const hairGeometry = new THREE.SphereGeometry(0.27 + heightVariance * 0.02, 20, 16, 0, Math.PI * 2, 0, Math.PI * 0.78);
+        const hairMesh = new THREE.Mesh(hairGeometry, hairMaterial);
+        hairMesh.position.set(0, headY + 0.05, -0.02);
+        hairMesh.rotation.x = -0.22;
+        hairMesh.castShadow = true;
+        group.add(hairMesh);
+
+        const collarGeometry = new THREE.TorusGeometry(0.28, 0.04, 12, 32);
+        const collarMesh = new THREE.Mesh(collarGeometry, trimMaterial);
+        collarMesh.position.set(0, torsoY + torsoHeight / 2 - 0.02, 0);
+        collarMesh.rotation.x = Math.PI / 2;
+        collarMesh.castShadow = true;
+        group.add(collarMesh);
+
+        const faceSprite = createFaceSprite({ seed, eyeColor: "#0f172a", browColor: hairHex });
+        faceSprite.position.set(0, headY, 0.2);
+        group.add(faceSprite);
+      } else {
+        const bodyMaterial = new THREE.MeshStandardMaterial({
+          color: new THREE.Color(agent.color ?? "#38bdf8"),
+          emissive: new THREE.Color(agent.accent ?? agent.color ?? "#38bdf8").multiplyScalar(0.25),
+          emissiveIntensity: agent.type === "patient" && agent.isEmergency ? 1.1 : 0.6,
+          metalness: 0.18,
+          roughness: 0.4,
+        });
+        const bodyMesh = new THREE.Mesh(capsuleGeometry, bodyMaterial);
+        bodyMesh.position.y = 0.95;
+        bodyMesh.castShadow = true;
+        group.add(bodyMesh);
+      }
 
       if (agent.type === "staff" && agent.label) {
         const labelCanvas = document.createElement("canvas");
@@ -695,9 +986,67 @@ export const createThreeSceneRenderer = ({ canvas, pixelRatio = window.devicePix
         animationId = null;
         return;
       }
+      updateRoomWallVisibility();
       controls.update();
       renderer.render(scene, camera);
       animationId = window.requestAnimationFrame(animate);
+    };
+
+    const updateRoomWallVisibility = () => {
+      if (roomInstances.length === 0) {
+        return;
+      }
+      const cameraPosition = camera.position;
+      cameraForward.set(0, 0, 0);
+      camera.getWorldDirection(cameraForward);
+      cameraForward.y = 0;
+      const hasForward = cameraForward.lengthSq() > 1e-6;
+      if (hasForward) {
+        cameraForward.normalize();
+      }
+      roomInstances.forEach((room) => {
+        cameraToRoom.copy(cameraPosition).sub(room.center);
+        cameraHorizontal.set(cameraToRoom.x, 0, cameraToRoom.z);
+        const horizontalDistance = cameraHorizontal.length();
+        const insideHorizontal = Math.abs(cameraToRoom.x) <= room.width / 2 + 0.4;
+        const insideDepth = Math.abs(cameraToRoom.z) <= room.depth / 2 + 0.4;
+        const insideHeight = cameraPosition.y <= room.wallHeight + 1.5;
+        const isInside = insideHorizontal && insideDepth && insideHeight;
+        if (horizontalDistance > 0) {
+          cameraHorizontal.divideScalar(horizontalDistance);
+        } else {
+          cameraHorizontal.set(0, 0, 0);
+        }
+        toRoomHorizontal.subVectors(room.center, cameraPosition);
+        toRoomHorizontal.y = 0;
+        const toRoomDistance = toRoomHorizontal.length();
+        if (toRoomDistance > 0) {
+          toRoomHorizontal.divideScalar(toRoomDistance);
+        } else {
+          toRoomHorizontal.set(0, 0, 0);
+        }
+        const lookingTowardRoom = hasForward && toRoomDistance > 0 && cameraForward.dot(toRoomHorizontal) > 0.32;
+        room.walls.forEach((wall) => {
+          const material = wall.mesh?.material;
+          if (!material) return;
+          const baseOpacity = wall.baseOpacity ?? material.opacity ?? 1;
+          let targetOpacity = baseOpacity;
+          if (isInside) {
+            targetOpacity = Math.min(targetOpacity, 0.08);
+          } else if (lookingTowardRoom && horizontalDistance > 0) {
+            const outsideAlignment = cameraHorizontal.dot(wall.normal);
+            const viewAlignment = hasForward ? cameraForward.dot(wall.interiorNormal) : 0;
+            if (outsideAlignment > 0.25 && viewAlignment > 0.35) {
+              const distanceFactor = Math.max(0.2, Math.min(1, 1 - horizontalDistance / 80));
+              const influence = viewAlignment * distanceFactor;
+              const minOpacity = Math.min(baseOpacity, 0.16);
+              targetOpacity = baseOpacity - (baseOpacity - minOpacity) * influence;
+            }
+          }
+          material.opacity += (targetOpacity - material.opacity) * 0.2;
+          material.opacity = THREE.MathUtils.clamp(material.opacity, 0.04, baseOpacity);
+        });
+      });
     };
 
     const setEnabled = (value) => {
@@ -737,6 +1086,38 @@ export const createThreeSceneRenderer = ({ canvas, pixelRatio = window.devicePix
       controls.update();
     };
 
+    const move = (forward = 0, strafe = 0) => {
+      if (!forward && !strafe) {
+        return;
+      }
+      forwardVector.subVectors(controls.target, camera.position);
+      forwardVector.y = 0;
+      if (forwardVector.lengthSq() < 1e-6) {
+        forwardVector.set(0, 0, -1);
+      } else {
+        forwardVector.normalize();
+      }
+      rightVector.copy(forwardVector).cross(WORLD_UP).normalize();
+      moveVector.copy(forwardVector).multiplyScalar(forward);
+      moveVector.addScaledVector(rightVector, strafe);
+      controls.target.add(moveVector);
+      camera.position.add(moveVector);
+      controls.update();
+    };
+
+    const elevate = (delta = 0) => {
+      if (!delta) {
+        return;
+      }
+      const newY = THREE.MathUtils.clamp(camera.position.y + delta, 4, 260);
+      const diff = newY - camera.position.y;
+      camera.position.y = newY;
+      if (Math.abs(diff) > 1e-5) {
+        controls.target.y = Math.max(-2, controls.target.y + diff * 0.12);
+      }
+      controls.update();
+    };
+
     const zoomBy = (factor) => {
       if (factor > 1) {
         controls.dollyIn(factor);
@@ -766,6 +1147,7 @@ export const createThreeSceneRenderer = ({ canvas, pixelRatio = window.devicePix
       }
       if (Array.isArray(rooms)) {
         updateRooms(rooms);
+        updateRoomWallVisibility();
       }
       if (Array.isArray(agents)) {
         updateAgents(agents);
@@ -781,6 +1163,8 @@ export const createThreeSceneRenderer = ({ canvas, pixelRatio = window.devicePix
       resetCamera,
       rotate,
       zoomBy,
+      move,
+      elevate,
       dispose: () => {
         setEnabled(false);
         controls.dispose();
@@ -790,6 +1174,7 @@ export const createThreeSceneRenderer = ({ canvas, pixelRatio = window.devicePix
         clearGroup(shellGroup);
         clearGroup(roomGroup);
         clearGroup(agentGroup);
+        roomInstances.length = 0;
       },
     };
   } catch (error) {
