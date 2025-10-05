@@ -22,6 +22,49 @@
           <div>Environment <span id="stat-environment">55</span></div>
           <div>Patient Welfare <span id="stat-welfare">55</span></div>
         </div>
+        <div class="header-management" data-management-menu>
+          <button
+            type="button"
+            class="header-management__toggle"
+            id="management-menu-toggle"
+            aria-haspopup="true"
+            aria-expanded="false"
+          >
+            Management
+          </button>
+          <ul class="header-management__menu" id="management-menu" role="menu" hidden>
+            <li role="none">
+              <button
+                type="button"
+                class="header-management__item"
+                role="menuitem"
+                data-open-policies
+              >
+                Hospital Policies
+              </button>
+            </li>
+            <li role="none">
+              <button
+                type="button"
+                class="header-management__item"
+                role="menuitem"
+                data-open-finance
+              >
+                Financials &amp; Loans
+              </button>
+            </li>
+            <li role="none">
+              <button
+                type="button"
+                class="header-management__item"
+                role="menuitem"
+                data-open-billing
+              >
+                Billing Ledger
+              </button>
+            </li>
+          </ul>
+        </div>
         <button
           id="toggle-focus-mode"
           class="focus-toggle"
@@ -57,27 +100,6 @@
             <span class="menu-chevron" aria-hidden="true"></span>
           </summary>
           <div class="menu-panel">
-            <div class="menu-subsection">
-              <h3 class="menu-subheading">Overview</h3>
-              <div class="menu-options" role="list">
-                <button
-                  class="menu-option"
-                  role="listitem"
-                  data-tab-target="overview"
-                  data-panel="#panel-policies"
-                >
-                  Hospital Policies
-                </button>
-                <button
-                  class="menu-option"
-                  role="listitem"
-                  data-tab-target="overview"
-                  data-panel="#panel-finance"
-                >
-                  Finance &amp; Loans
-                </button>
-              </div>
-            </div>
             <div class="menu-subsection">
               <h3 class="menu-subheading">Build</h3>
               <div class="menu-options" role="list">
@@ -296,36 +318,10 @@
             <h2>Hospital Pulse on the operations rail</h2>
             <p>
               Keep the live campus front and center—the quick stats now sit to the right so you can monitor
-              cleanliness, morale, and grounds without shrinking the view.
+              cleanliness, morale, and grounds without shrinking the view. Use the Management menu in the header to
+              adjust policies, review finances, and inspect billing when you need a deeper dive.
             </p>
           </div>
-          <div class="overview-divider" aria-hidden="true"></div>
-          <div class="policies" id="panel-policies">
-            <h3>Hospital Policies</h3>
-            <label>
-              <input type="checkbox" id="policy-fast-track" />
-              Fast-track emergency patients (higher cost, reputation boost)
-            </label>
-            <label>
-              <input type="checkbox" id="policy-overtime" />
-              Offer overtime pay (reduces morale loss, adds wage cost)
-            </label>
-          </div>
-          <section id="panel-finance" class="finance-panel" aria-label="Hospital finance options">
-            <h3>Finance &amp; Billing</h3>
-            <p>Secure loans for expansion and monitor how patients settle their care costs.</p>
-            <div class="loan-offers" id="loan-offers"></div>
-            <div class="finance-status">
-              <div>
-                <h4>Active Loans</h4>
-                <ul id="active-loans" class="loan-list"></ul>
-              </div>
-              <div>
-                <h4>Patient Receivables</h4>
-                <div id="receivables-summary" class="receivables-summary"></div>
-              </div>
-            </div>
-          </section>
         </section>
 
         <section id="tab-build" class="tab-panel" role="tabpanel">
@@ -618,10 +614,6 @@
           <div id="daily-report"></div>
         </section>
         <section>
-          <h2>Billing Ledger</h2>
-          <ul id="billing-ledger" class="ledger-list"></ul>
-        </section>
-        <section>
           <h2>Event Log</h2>
           <ul id="event-log" class="event-log"></ul>
         </section>
@@ -743,6 +735,98 @@
       </div>
       <footer class="info-menu__footer">
         <button type="button" class="info-menu__close" data-close-hospital-overview>Close</button>
+      </footer>
+    </section>
+  </div>
+
+  <div id="policies-menu" class="info-menu" aria-hidden="true">
+    <div class="info-menu__backdrop" data-close-policies></div>
+    <section
+      class="info-menu__panel"
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="policies-menu-title"
+    >
+      <header class="info-menu__header">
+        <h2 id="policies-menu-title" tabindex="-1">Hospital Policies</h2>
+        <p>Fine-tune global guidelines to respond to emergencies and staff morale.</p>
+      </header>
+      <div class="info-menu__body">
+        <div class="policies" id="panel-policies">
+          <label class="policy-option">
+            <input type="checkbox" id="policy-fast-track" />
+            <span>Fast-track emergency patients (higher cost, reputation boost)</span>
+          </label>
+          <label class="policy-option">
+            <input type="checkbox" id="policy-overtime" />
+            <span>Offer overtime pay (reduces morale loss, adds wage cost)</span>
+          </label>
+        </div>
+      </div>
+      <footer class="info-menu__footer">
+        <button type="button" class="info-menu__close" data-close-policies>Close</button>
+      </footer>
+    </section>
+  </div>
+
+  <div id="finance-menu" class="info-menu" aria-hidden="true">
+    <div class="info-menu__backdrop" data-close-finance></div>
+    <section
+      class="info-menu__panel"
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="finance-menu-title"
+    >
+      <header class="info-menu__header">
+        <h2 id="finance-menu-title" tabindex="-1">Finance &amp; Billing</h2>
+        <p>Secure expansion capital and monitor how patients settle their accounts.</p>
+      </header>
+      <div class="info-menu__body">
+        <section id="panel-finance" class="finance-panel" aria-label="Hospital finance options">
+          <p class="finance-panel__intro">
+            Secure loans for expansion and monitor how patients settle their care costs.
+          </p>
+          <div class="loan-offers" id="loan-offers"></div>
+          <div class="finance-status">
+            <div>
+              <h4>Active Loans</h4>
+              <ul id="active-loans" class="loan-list"></ul>
+            </div>
+            <div>
+              <h4>Patient Receivables</h4>
+              <div id="receivables-summary" class="receivables-summary"></div>
+            </div>
+          </div>
+        </section>
+      </div>
+      <footer class="info-menu__footer">
+        <button type="button" class="info-menu__close" data-close-finance>Close</button>
+      </footer>
+    </section>
+  </div>
+
+  <div id="billing-menu" class="info-menu" aria-hidden="true">
+    <div class="info-menu__backdrop" data-close-billing></div>
+    <section
+      class="info-menu__panel"
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="billing-menu-title"
+    >
+      <header class="info-menu__header">
+        <h2 id="billing-menu-title" tabindex="-1">Billing Ledger</h2>
+        <p>Review recent patient charges, repayments, and loan activity in one dedicated feed.</p>
+      </header>
+      <div class="info-menu__body">
+        <section class="billing-panel" aria-label="Hospital billing ledger">
+          <p class="billing-panel__intro">
+            Track incoming payments and outstanding balances without keeping the operations column open.
+          </p>
+          <ul id="billing-ledger" class="ledger-list"></ul>
+        </section>
+      </div>
+      <footer class="info-menu__footer">
+        <button type="button" class="info-menu__close" data-close-billing>Close</button>
       </footer>
     </section>
   </div>

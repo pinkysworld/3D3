@@ -84,6 +84,7 @@ const LIGHT_DIRECTION = {
 };
 const ROTATION_SENSITIVITY = 0.0042;
 const ROTATION_KEY_STEP = Math.PI / 18;
+const THREE_KEYBOARD_MOVE_STEP = 1.25;
 
 const DEPARTMENT_BUDGET_LEVEL_IDS = departmentBudgetLevels.map((level) => level.id);
 
@@ -183,10 +184,10 @@ const setDepartmentBudgetLevel = (id, level) => {
 
 const createShellForParcel = (parcel) => {
   if (!parcel) return null;
-  const marginX = Math.max(2, Math.round(parcel.width / 10));
-  const marginY = Math.max(2, Math.round(parcel.height / 8));
-  const width = clamp(parcel.width - marginX * 2, 6, Math.max(6, parcel.width - 2));
-  const height = clamp(parcel.height - marginY * 2, 6, Math.max(6, parcel.height - 2));
+  const marginX = Math.max(1, Math.round(parcel.width / 18));
+  const marginY = Math.max(1, Math.round(parcel.height / 12));
+  const width = Math.min(parcel.width - 2, Math.max(6, parcel.width - marginX * 2));
+  const height = Math.min(parcel.height - 2, Math.max(6, parcel.height - marginY * 2));
   const shellMarginX = Math.max(1, Math.floor((parcel.width - width) / 2));
   const shellMarginY = Math.max(1, Math.floor((parcel.height - height) / 2));
   const shellX = parcel.x + shellMarginX;
@@ -398,6 +399,23 @@ const elements = {
     modal: document.querySelector("#hospital-overview-menu"),
     metrics: document.querySelector("#hospital-overview-metrics"),
   },
+  policiesMenu: {
+    openButtons: Array.from(document.querySelectorAll("[data-open-policies]")),
+    modal: document.querySelector("#policies-menu"),
+  },
+  financeMenu: {
+    openButtons: Array.from(document.querySelectorAll("[data-open-finance]")),
+    modal: document.querySelector("#finance-menu"),
+  },
+  billingMenu: {
+    openButtons: Array.from(document.querySelectorAll("[data-open-billing]")),
+    modal: document.querySelector("#billing-menu"),
+  },
+  managementMenu: {
+    container: document.querySelector("[data-management-menu]"),
+    toggle: document.querySelector("#management-menu-toggle"),
+    menu: document.querySelector("#management-menu"),
+  },
   zoom: {
     container: document.querySelector("#hospital-zoom-controls"),
     indicator: document.querySelector("#hospital-zoom-indicator"),
@@ -506,7 +524,8 @@ let threeRenderer = null;
 let isThreeSceneActive = false;
 
 const defaultViewHintText = elements.viewHint?.textContent ?? "";
-const threeViewHintText = "Drag to orbit • Scroll to zoom • Double-click to reset camera";
+const threeViewHintTitle =
+  "Drag to orbit • Scroll to zoom • WASD/Arrow keys to move • Q/E to rotate • R/F to raise/lower";
 
 let selectedRoom = null;
 let patientIdCounter = 1;
@@ -531,6 +550,9 @@ let showcaseRotateLastPoint = null;
 let lastFocusedBeforeSaveMenu = null;
 let lastFocusedBeforeLotOverview = null;
 let lastFocusedBeforeHospitalOverview = null;
+let lastFocusedBeforePoliciesMenu = null;
+let lastFocusedBeforeFinanceMenu = null;
+let lastFocusedBeforeBillingMenu = null;
 let selectedPatientId = null;
 let audioSettings = { ...DEFAULT_AUDIO_SETTINGS };
 let audioContextInstance = null;
@@ -1029,14 +1051,16 @@ const updateShowcaseZoomIndicator = () => {
     if (elements.viewHint && defaultViewHintText) {
       elements.viewHint.textContent = defaultViewHintText;
     }
+    elements.viewHint?.removeAttribute("title");
     return;
   }
   container.removeAttribute("hidden");
   elements.viewHint?.removeAttribute("hidden");
   if (isThreeSceneActive) {
     indicator.textContent = "3D";
-    if (elements.viewHint) {
-      elements.viewHint.textContent = threeViewHintText;
+    if (elements.viewHint && defaultViewHintText) {
+      elements.viewHint.textContent = defaultViewHintText;
+      elements.viewHint.setAttribute("title", threeViewHintTitle);
     }
     return;
   }
@@ -1044,6 +1068,7 @@ const updateShowcaseZoomIndicator = () => {
   if (elements.viewHint && defaultViewHintText) {
     elements.viewHint.textContent = defaultViewHintText;
   }
+  elements.viewHint?.removeAttribute("title");
 };
 
 const setShowcaseZoom = (
@@ -8262,6 +8287,261 @@ const readSaveSlot = (slot) => {
 const isLotOverviewOpen = () => Boolean(elements.lotOverview?.modal?.classList.contains("open"));
 const isHospitalOverviewOpen = () =>
   Boolean(elements.hospitalOverview?.modal?.classList.contains("open"));
+const isPoliciesMenuOpen = () => Boolean(elements.policiesMenu?.modal?.classList.contains("open"));
+const isFinanceMenuOpen = () => Boolean(elements.financeMenu?.modal?.classList.contains("open"));
+const isBillingMenuOpen = () => Boolean(elements.billingMenu?.modal?.classList.contains("open"));
+
+const openPoliciesMenu = (trigger) => {
+  if (!elements.policiesMenu?.modal) return;
+  if (isPoliciesMenuOpen()) {
+    return;
+  }
+  elements.policiesMenu.modal.classList.add("open");
+  elements.policiesMenu.modal.setAttribute("aria-hidden", "false");
+  document.body.classList.add("modal-open");
+  lastFocusedBeforePoliciesMenu =
+    trigger instanceof HTMLElement
+      ? trigger
+      : document.activeElement instanceof HTMLElement
+      ? document.activeElement
+      : null;
+  const focusTarget =
+    elements.policiesMenu.modal.querySelector("#policies-menu-title") ??
+    elements.policiesMenu.modal.querySelector("[data-close-policies]");
+  focusTarget?.focus();
+};
+
+const closePoliciesMenu = () => {
+  if (!elements.policiesMenu?.modal) return;
+  if (!isPoliciesMenuOpen()) return;
+  elements.policiesMenu.modal.classList.remove("open");
+  elements.policiesMenu.modal.setAttribute("aria-hidden", "true");
+  if (
+    !isSaveMenuOpen() &&
+    !isLotOverviewOpen() &&
+    !isHospitalOverviewOpen() &&
+    !isFinanceMenuOpen() &&
+    !isBillingMenuOpen()
+  ) {
+    document.body.classList.remove("modal-open");
+  }
+  const visibleButton = elements.policiesMenu.openButtons?.find(
+    (button) => button instanceof HTMLElement && !button.closest("[hidden]")
+  );
+  const managementToggle =
+    elements.managementMenu?.toggle instanceof HTMLElement ? elements.managementMenu.toggle : null;
+  const fallback = visibleButton ?? managementToggle;
+  const focusTarget =
+    lastFocusedBeforePoliciesMenu &&
+    typeof lastFocusedBeforePoliciesMenu.focus === "function" &&
+    !lastFocusedBeforePoliciesMenu.closest("[hidden]")
+      ? lastFocusedBeforePoliciesMenu
+      : fallback;
+  focusTarget?.focus();
+  lastFocusedBeforePoliciesMenu = null;
+};
+
+const openFinanceMenu = (trigger) => {
+  if (!elements.financeMenu?.modal) return;
+  if (isFinanceMenuOpen()) {
+    return;
+  }
+  updateFinancePanels();
+  elements.financeMenu.modal.classList.add("open");
+  elements.financeMenu.modal.setAttribute("aria-hidden", "false");
+  document.body.classList.add("modal-open");
+  lastFocusedBeforeFinanceMenu =
+    trigger instanceof HTMLElement
+      ? trigger
+      : document.activeElement instanceof HTMLElement
+      ? document.activeElement
+      : null;
+  const focusTarget =
+    elements.financeMenu.modal.querySelector("#finance-menu-title") ??
+    elements.financeMenu.modal.querySelector("[data-close-finance]");
+  focusTarget?.focus();
+};
+
+const closeFinanceMenu = () => {
+  if (!elements.financeMenu?.modal) return;
+  if (!isFinanceMenuOpen()) return;
+  elements.financeMenu.modal.classList.remove("open");
+  elements.financeMenu.modal.setAttribute("aria-hidden", "true");
+  if (
+    !isSaveMenuOpen() &&
+    !isLotOverviewOpen() &&
+    !isHospitalOverviewOpen() &&
+    !isPoliciesMenuOpen() &&
+    !isBillingMenuOpen()
+  ) {
+    document.body.classList.remove("modal-open");
+  }
+  const visibleButton = elements.financeMenu.openButtons?.find(
+    (button) => button instanceof HTMLElement && !button.closest("[hidden]")
+  );
+  const managementToggle =
+    elements.managementMenu?.toggle instanceof HTMLElement ? elements.managementMenu.toggle : null;
+  const fallback = visibleButton ?? managementToggle;
+  const focusTarget =
+    lastFocusedBeforeFinanceMenu &&
+    typeof lastFocusedBeforeFinanceMenu.focus === "function" &&
+    !lastFocusedBeforeFinanceMenu.closest("[hidden]")
+      ? lastFocusedBeforeFinanceMenu
+      : fallback;
+  focusTarget?.focus();
+  lastFocusedBeforeFinanceMenu = null;
+};
+
+const openBillingMenu = (trigger) => {
+  if (!elements.billingMenu?.modal) return;
+  if (isBillingMenuOpen()) {
+    renderBillingLedger();
+    return;
+  }
+  renderBillingLedger();
+  elements.billingMenu.modal.classList.add("open");
+  elements.billingMenu.modal.setAttribute("aria-hidden", "false");
+  document.body.classList.add("modal-open");
+  lastFocusedBeforeBillingMenu =
+    trigger instanceof HTMLElement
+      ? trigger
+      : document.activeElement instanceof HTMLElement
+      ? document.activeElement
+      : null;
+  const focusTarget =
+    elements.billingMenu.modal.querySelector("#billing-menu-title") ??
+    elements.billingMenu.modal.querySelector("[data-close-billing]");
+  focusTarget?.focus();
+};
+
+const closeBillingMenu = () => {
+  if (!elements.billingMenu?.modal) return;
+  if (!isBillingMenuOpen()) return;
+  elements.billingMenu.modal.classList.remove("open");
+  elements.billingMenu.modal.setAttribute("aria-hidden", "true");
+  if (
+    !isSaveMenuOpen() &&
+    !isLotOverviewOpen() &&
+    !isHospitalOverviewOpen() &&
+    !isPoliciesMenuOpen() &&
+    !isFinanceMenuOpen()
+  ) {
+    document.body.classList.remove("modal-open");
+  }
+  const visibleButton = elements.billingMenu.openButtons?.find(
+    (button) => button instanceof HTMLElement && !button.closest("[hidden]")
+  );
+  const managementToggle =
+    elements.managementMenu?.toggle instanceof HTMLElement ? elements.managementMenu.toggle : null;
+  const fallback = visibleButton ?? managementToggle;
+  const focusTarget =
+    lastFocusedBeforeBillingMenu &&
+    typeof lastFocusedBeforeBillingMenu.focus === "function" &&
+    !lastFocusedBeforeBillingMenu.closest("[hidden]")
+      ? lastFocusedBeforeBillingMenu
+      : fallback;
+  focusTarget?.focus();
+  lastFocusedBeforeBillingMenu = null;
+};
+
+const setupPoliciesMenu = () => {
+  elements.policiesMenu?.openButtons?.forEach((button) => {
+    if (!button) return;
+    button.addEventListener("click", (event) => {
+      const target = event.currentTarget instanceof HTMLElement ? event.currentTarget : button;
+      openPoliciesMenu(target);
+    });
+  });
+  elements.policiesMenu?.modal
+    ?.querySelectorAll("[data-close-policies]")
+    .forEach((button) => button.addEventListener("click", () => closePoliciesMenu()));
+};
+
+const setupFinanceMenu = () => {
+  elements.financeMenu?.openButtons?.forEach((button) => {
+    if (!button) return;
+    button.addEventListener("click", (event) => {
+      const target = event.currentTarget instanceof HTMLElement ? event.currentTarget : button;
+      openFinanceMenu(target);
+    });
+  });
+  elements.financeMenu?.modal
+    ?.querySelectorAll("[data-close-finance]")
+    .forEach((button) => button.addEventListener("click", () => closeFinanceMenu()));
+};
+
+const setupBillingMenu = () => {
+  elements.billingMenu?.openButtons?.forEach((button) => {
+    if (!button) return;
+    button.addEventListener("click", (event) => {
+      const target = event.currentTarget instanceof HTMLElement ? event.currentTarget : button;
+      openBillingMenu(target);
+    });
+  });
+  elements.billingMenu?.modal
+    ?.querySelectorAll("[data-close-billing]")
+    .forEach((button) => button.addEventListener("click", () => closeBillingMenu()));
+};
+
+const setupManagementMenu = () => {
+  const container = elements.managementMenu?.container;
+  const toggle = elements.managementMenu?.toggle;
+  const menu = elements.managementMenu?.menu;
+  if (!container || !toggle || !menu) return;
+
+  let expanded = false;
+
+  const setExpanded = (value) => {
+    expanded = Boolean(value);
+    toggle.setAttribute("aria-expanded", expanded ? "true" : "false");
+    if (expanded) {
+      menu.removeAttribute("hidden");
+    } else {
+      menu.setAttribute("hidden", "");
+    }
+  };
+
+  const closeMenu = (restoreFocus = false) => {
+    if (!expanded) return;
+    setExpanded(false);
+    if (restoreFocus) {
+      toggle.focus();
+    }
+  };
+
+  setExpanded(false);
+
+  toggle.addEventListener("click", (event) => {
+    event.preventDefault();
+    const nextState = !expanded;
+    setExpanded(nextState);
+    if (nextState) {
+      const firstAction = menu.querySelector("button");
+      firstAction?.focus();
+    }
+  });
+
+  container.addEventListener("keydown", (event) => {
+    if (event.key === "Escape" && expanded) {
+      event.preventDefault();
+      closeMenu(true);
+    }
+  });
+
+  document.addEventListener("click", (event) => {
+    if (!expanded) return;
+    if (!container.contains(event.target)) {
+      closeMenu();
+    }
+  });
+
+  const actionButtons = menu.querySelectorAll(
+    "[data-open-policies], [data-open-finance], [data-open-billing]"
+  );
+  actionButtons.forEach((button) => {
+    button.addEventListener("click", () => closeMenu());
+  });
+};
 
 const renderHospitalOverviewModal = () => {
   const list = elements.hospitalOverview?.metrics;
@@ -8321,7 +8601,13 @@ const closeLotOverviewMenu = () => {
   if (!isLotOverviewOpen()) return;
   elements.lotOverview.modal.classList.remove("open");
   elements.lotOverview.modal.setAttribute("aria-hidden", "true");
-  if (!isSaveMenuOpen() && !isHospitalOverviewOpen()) {
+  if (
+    !isSaveMenuOpen() &&
+    !isHospitalOverviewOpen() &&
+    !isPoliciesMenuOpen() &&
+    !isFinanceMenuOpen() &&
+    !isBillingMenuOpen()
+  ) {
     document.body.classList.remove("modal-open");
   }
   const focusTarget =
@@ -8365,7 +8651,13 @@ const closeHospitalOverviewMenu = () => {
   if (!isHospitalOverviewOpen()) return;
   elements.hospitalOverview.modal.classList.remove("open");
   elements.hospitalOverview.modal.setAttribute("aria-hidden", "true");
-  if (!isSaveMenuOpen() && !isLotOverviewOpen()) {
+  if (
+    !isSaveMenuOpen() &&
+    !isLotOverviewOpen() &&
+    !isPoliciesMenuOpen() &&
+    !isFinanceMenuOpen() &&
+    !isBillingMenuOpen()
+  ) {
     document.body.classList.remove("modal-open");
   }
   const focusTarget =
@@ -8745,7 +9037,15 @@ const closeSaveMenu = () => {
   if (!elements.save?.modal) return;
   elements.save.modal.classList.remove("open");
   elements.save.modal.setAttribute("aria-hidden", "true");
-  document.body.classList.remove("modal-open");
+  if (
+    !isLotOverviewOpen() &&
+    !isHospitalOverviewOpen() &&
+    !isPoliciesMenuOpen() &&
+    !isFinanceMenuOpen() &&
+    !isBillingMenuOpen()
+  ) {
+    document.body.classList.remove("modal-open");
+  }
   if (lastFocusedBeforeSaveMenu && typeof lastFocusedBeforeSaveMenu.focus === "function") {
     lastFocusedBeforeSaveMenu.focus();
   } else if (elements.save.openButton) {
@@ -10300,6 +10600,10 @@ const init = () => {
   setupSaveMenu();
   setupLotOverviewMenu();
   setupHospitalOverviewMenu();
+  setupManagementMenu();
+  setupPoliciesMenu();
+  setupFinanceMenu();
+  setupBillingMenu();
   setupPatientDetail();
   setupDesignerControls();
   updateDesignerOptions();
@@ -10336,7 +10640,33 @@ const init = () => {
       openSaveMenu();
       return;
     }
+
+    const activeElement = document.activeElement;
+    const activeTag = activeElement?.tagName;
+    const isTypingElement = Boolean(
+      activeElement &&
+        (activeElement.isContentEditable ||
+          activeTag === "INPUT" ||
+          activeTag === "TEXTAREA" ||
+          activeTag === "SELECT")
+    );
+
     if (event.key === "Escape") {
+      if (isBillingMenuOpen()) {
+        event.preventDefault();
+        closeBillingMenu();
+        return;
+      }
+      if (isFinanceMenuOpen()) {
+        event.preventDefault();
+        closeFinanceMenu();
+        return;
+      }
+      if (isPoliciesMenuOpen()) {
+        event.preventDefault();
+        closePoliciesMenu();
+        return;
+      }
       if (isHospitalOverviewOpen()) {
         event.preventDefault();
         closeHospitalOverviewMenu();
@@ -10370,18 +10700,82 @@ const init = () => {
         return;
       }
       clearBuildSelection();
+      return;
     }
+
     if (viewMode === "showcase") {
-      const key = event.key.toLowerCase();
-      const step = event.shiftKey ? ROTATION_KEY_STEP * 2 : ROTATION_KEY_STEP;
+      if (isTypingElement) {
+        return;
+      }
+      const rawKey = event.key;
+      const key = rawKey.toLowerCase();
+
+      if (isThreeSceneActive) {
+        const renderer = ensureThreeRenderer();
+        if (!renderer?.isSupported) {
+          return;
+        }
+        const moveStep = THREE_KEYBOARD_MOVE_STEP * (event.shiftKey ? 2.25 : 1);
+        const elevateStep = event.shiftKey ? 2 : 1;
+        const rotationStep = event.shiftKey ? ROTATION_KEY_STEP * 2 : ROTATION_KEY_STEP;
+
+        if (key === "w" || rawKey === "ArrowUp") {
+          event.preventDefault();
+          renderer.move(moveStep, 0);
+          return;
+        }
+        if (key === "s" || rawKey === "ArrowDown") {
+          event.preventDefault();
+          renderer.move(-moveStep, 0);
+          return;
+        }
+        if (key === "a" || rawKey === "ArrowLeft") {
+          event.preventDefault();
+          renderer.move(0, -moveStep);
+          return;
+        }
+        if (key === "d" || rawKey === "ArrowRight") {
+          event.preventDefault();
+          renderer.move(0, moveStep);
+          return;
+        }
+        if (key === "q" || key === "[") {
+          event.preventDefault();
+          renderer.rotate(-rotationStep);
+          return;
+        }
+        if (key === "e" || key === "]") {
+          event.preventDefault();
+          renderer.rotate(rotationStep);
+          return;
+        }
+        if (key === "r") {
+          event.preventDefault();
+          renderer.elevate(elevateStep);
+          return;
+        }
+        if (key === "f") {
+          event.preventDefault();
+          renderer.elevate(-elevateStep);
+          return;
+        }
+        if (key === "home") {
+          event.preventDefault();
+          resetShowcaseView();
+          return;
+        }
+        return;
+      }
+
+      const rotationStep = event.shiftKey ? ROTATION_KEY_STEP * 2 : ROTATION_KEY_STEP;
       if (key === "arrowleft" || key === "q" || key === "[") {
         event.preventDefault();
-        adjustShowcaseRotation(-step);
+        adjustShowcaseRotation(-rotationStep);
         return;
       }
       if (key === "arrowright" || key === "e" || key === "]") {
         event.preventDefault();
-        adjustShowcaseRotation(step);
+        adjustShowcaseRotation(rotationStep);
         return;
       }
       if (key === "home") {
